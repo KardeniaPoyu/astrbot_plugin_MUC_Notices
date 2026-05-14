@@ -25,7 +25,7 @@ DEFAULT_HEADERS = {
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 }
 DATE_PATTERN = re.compile(
-    r"(?P<year>\d{4})\s*(?:年 |[-/.])\s*(?P<month>\d{1,2})\s*(?:月 |[-/.])\s*(?P<day>\d{1,2})\s*日?"
+    r"(?P<year>\d{4})\s*(?:年|[-/.])\s*(?P<month>\d{1,2})\s*(?:月|[-/.])\s*(?P<day>\d{1,2})\s*日?"
 )
 
 
@@ -265,14 +265,27 @@ class MucRssService:
                 notice_type = source.get("api_params", {}).get("type", 5)
                 link = f"https://my.muc.edu.cn/page/11#/print?type={notice_type}&notice_id={notice_id}&show_type=1"
                 published_at = datetime.now(CHINA_TZ)
-                time_str = item.get("notice_release_time", "")
-                if time_str:
+                time_val = item.get("notice_release_time")
+                if time_val:
                     try:
-                        published_at = datetime.strptime(
-                            time_str.split(".")[0].strip()[:19],
-                            "%Y-%m-%d %H:%M:%S"
-                        ).replace(tzinfo=CHINA_TZ)
-                    except (ValueError, IndexError):
+                        if isinstance(time_val, (int, float)) or (isinstance(time_val, str) and time_val.isdigit()):
+                            ts = float(time_val)
+                            if ts > 1e11:  # 毫秒级时间戳
+                                ts /= 1000.0
+                            published_at = datetime.fromtimestamp(ts, tz=CHINA_TZ)
+                        elif isinstance(time_val, str):
+                            clean_time = time_val.split(".")[0].strip()
+                            if len(clean_time) >= 19 and "-" in clean_time:
+                                published_at = datetime.strptime(clean_time[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=CHINA_TZ)
+                            elif len(clean_time) >= 16 and "-" in clean_time:
+                                published_at = datetime.strptime(clean_time[:16], "%Y-%m-%d %H:%M").replace(tzinfo=CHINA_TZ)
+                            elif len(clean_time) >= 10 and "-" in clean_time:
+                                published_at = datetime.strptime(clean_time[:10], "%Y-%m-%d").replace(tzinfo=CHINA_TZ)
+                            else:
+                                parsed = self._parse_date(time_val)
+                                if parsed:
+                                    published_at = parsed
+                    except Exception:
                         pass
                 # 提取纯文本摘要（去掉HTML标签）
                 raw_content = item.get("notice_content", "")

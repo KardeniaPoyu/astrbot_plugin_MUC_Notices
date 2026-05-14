@@ -156,6 +156,17 @@ SOURCES: list[SourceConfig] = [
         "requires_auth": True,
         "api_params": {"currentPage": 1, "pageSize": 10, "type": 8},
     },
+    {
+        "key": "my_xgtz",
+        "name": "信息门户 - 学工通知",
+        "url": "https://my.muc.edu.cn/comsys-portal-notice-web/getNoticeByPage",
+        "selector": 'api:type=7',
+        "parser": parse_selector_generic,
+        "category": "portal",
+        "base_url": "https://my.muc.edu.cn/",
+        "requires_auth": True,
+        "api_params": {"currentPage": 1, "pageSize": 10, "type": 7},
+    },
 ]
 
 SOURCES_BY_KEY = {source["key"]: source for source in SOURCES if "key" in source}

@@ -336,12 +336,12 @@ class MucNoticePlugin(Star):
 
     @muc_notice_group.command("latest_portal")
     async def latest_portal(self, event: AstrMessageEvent):
-        source_keys = {"my_bgtz", "my_jxtz", "my_kytz"}
+        source_keys = {"my_bgtz", "my_jxtz", "my_kytz", "my_xgtz"}
         notices = await self._rss_service.fetch_notices(source_keys=source_keys)
         if not notices:
             yield event.plain_result("信息门户暂无通知。需确保已配置正确的账号密码。")
             return
-        yield _render_and_send(event, notices[:5], "信息门户")
+        yield _render_and_send(event, notices[:8], "信息门户")
 
     @muc_notice_group.command("login_status")
     async def login_status(self, event: AstrMessageEvent):

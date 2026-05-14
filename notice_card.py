@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 from matplotlib.patches import FancyBboxPatch
 import os
+import textwrap
 
 # 字体
 _FONT_PATH = "/root/AstrBot/data/plugins/astrbot_plugin_exchangerate_ICBC/fonts/NotoSansSC-Medium.ttf"
@@ -27,8 +28,7 @@ DARK = '#1a1a1a'
 def render_notices(notices: list[dict], save_path: str):
     """将通知列表渲染为卡片图片"""
     n = len(notices)
-    card_height = 1.3
-    fig_height = max(1.8, 1.5 + n * card_height)
+    fig_height = max(2.5, 1.5 + n * 1.5)
     
     fig, ax = plt.subplots(figsize=(8.5, fig_height))
     ax.set_xlim(0, 8.5)
@@ -52,34 +52,41 @@ def render_notices(notices: list[dict], save_path: str):
         source = item.get('source', item.get('source_key', ''))
         title = item.get('title', '')
         date = item.get('date', '')
-        summary = item.get('summary', '')[:80]
+        summary = item.get('summary', '')[:100]
         
-        card_y = y - card_height
+        # 自动换行
+        wrapped_summary = textwrap.fill(summary, width=35) if summary else ""
+        summary_lines = 0
+        if wrapped_summary:
+            summary_lines = wrapped_summary.count('\n') + 1
+        # 根据内容动态调整卡片高度
+        card_h = 0.9 + summary_lines * 0.18
+        card_y = y - card_h
         
         # 卡片背景
-        card = FancyBboxPatch((0.3, card_y), 7.9, card_height,
+        card = FancyBboxPatch((0.3, card_y), 7.9, card_h,
                              boxstyle="round,pad=0.05", 
                              facecolor=WHITE, edgecolor='#e8e8e8', linewidth=0.5)
         ax.add_patch(card)
         
         # 红色竖条
-        stripe = FancyBboxPatch((0.3, card_y + 0.08), 0.06, card_height - 0.16,
+        stripe = FancyBboxPatch((0.3, card_y + 0.08), 0.06, card_h - 0.16,
                                boxstyle="round,pad=0", facecolor=MUC_RED, edgecolor='none')
         ax.add_patch(stripe)
         
         # 来源 + 日期
-        ax.text(0.55, card_y + card_height - 0.25, f'[{source}]',
+        ax.text(0.55, card_y + card_h - 0.25, f'[{source}]',
                 fontsize=7, color=MUC_RED, va='top')
-        ax.text(7.9, card_y + card_height - 0.25, date,
+        ax.text(7.9, card_y + card_h - 0.25, date,
                 fontsize=7, color=MUC_GRAY, ha='right', va='top')
         
         # 标题
-        ax.text(0.55, card_y + card_height - 0.5, title,
+        ax.text(0.55, card_y + card_h - 0.50, title,
                 fontsize=9.5, fontweight='bold', color=DARK, va='top')
         
-        # 摘要
-        if summary:
-            ax.text(0.55, card_y + card_height - 0.8, summary,
+        # 摘要（自动换行）
+        if wrapped_summary:
+            ax.text(0.55, card_y + card_h - 0.80, wrapped_summary,
                     fontsize=7.5, color='#555', va='top')
         
         y = card_y

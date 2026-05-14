@@ -27,7 +27,7 @@ DARK = '#1a1a1a'
 def render_notices(notices: list[dict], save_path: str):
     """将通知列表渲染为卡片图片"""
     n = len(notices)
-    card_height = 1.0
+    card_height = 1.3
     fig_height = max(1.8, 1.5 + n * card_height)
     
     fig, ax = plt.subplots(figsize=(8.5, fig_height))

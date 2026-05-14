@@ -432,36 +432,50 @@ class MucNoticePlugin(Star):
         source_subscriptions = await self._subscription_store.get_source_subscriptions()
         push_targets = set(self.config.get("push_targets", []))
 
+        all_recipients = set(global_sessions)
         for item in items:
-            recipients = set(global_sessions)
-            recipients.update(
-                session
-                for session, source_keys in source_subscriptions.items()
-                if item["source_key"] in source_keys
-            )
-            recipients.update(push_targets)
+            for session, source_keys in source_subscriptions.items():
+                if item["source_key"] in source_keys:
+                    all_recipients.add(session)
+        all_recipients.update(push_targets)
 
-            summary = item.get("summary", "")
-            if summary:
-                text = (
-                    f"[MUC 新通知][{item['source']}]\n"
-                    f"{item['title']}\n"
-                    f"{summary}\n"
-                    f"{item['date']} | \U0001f517 {item['link']}"
-                )
-            else:
-                text = (
-                    f"[MUC 新通知][{item['source']}]\n"
-                    f"{item['title']}\n"
-                    f"{item['date']}\n"
-                    f"\U0001f517 {item['link']}"
-                )
+        if not all_recipients or not items:
+            return
 
-            for umo in recipients:
-                try:
-                    await self.context.send_message(umo, MessageChain().plain(text))
-                except Exception as exc:
-                    logger.warning(f"[MUC RSS] 向会话推送失败 {umo}: {exc}")
+        try:
+            fd, tmp_path = tempfile.mkstemp(suffix=".png", prefix="muc_push_")
+            os.close(fd)
+            for n in items:
+                if "source_key" in n and "source" not in n:
+                    n["source"] = n["source_key"]
+            render_notices(items, tmp_path)
+        except Exception as e:
+            logger.error(f"[MUC RSS] 渲染推送卡片失败: {e}")
+            for item in items:
+                summary = item.get("summary", "")
+                parts = [
+                    f"[MUC 新通知][{item['source']}]",
+                    item['title'],
+                ]
+                if summary:
+                    parts.append(summary)
+                parts.append(f"{item['date']} | \U0001f517 {item['link']}")
+                text = "\n".join(parts)
+                for umo in all_recipients:
+                    try:
+                        await self.context.send_message(umo, MessageChain().plain(text))
+                    except Exception as exc:
+                        logger.warning(f"[MUC RSS] 向会话推送失败 {umo}: {exc}")
+            return
+
+        for umo in all_recipients:
+            try:
+                await self.context.send_message(
+                    umo,
+                    MessageChain(chain=[Image.fromFileSystem(tmp_path)])
+                )
+            except Exception as exc:
+                logger.warning(f"[MUC RSS] 向会话推送卡片失败 {umo}: {exc}")
 
     def _resolve_source_from_event(
         self, event: AstrMessageEvent, command_name: str

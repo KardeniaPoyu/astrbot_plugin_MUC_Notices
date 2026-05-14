@@ -81,22 +81,23 @@ class MucRssService:
                 follow_redirects=True,
                 headers=DEFAULT_HEADERS,
             ) as client:
-                # 公开来源用新 client
+                # 公开来源用新 client 并发
                 pub_tasks = [
                     self._fetch_source_notices(client, source)
                     for source in public_sources
                 ]
-                # 认证来源用 auth_client
-                auth_tasks = []
-                for source in auth_sources:
-                    auth_tasks.append(
-                        self._fetch_source_notices(auth_client, source)
-                    )
-                all_tasks = pub_tasks + auth_tasks
-                return await asyncio.gather(
-                    *all_tasks,
-                    return_exceptions=True,
-                )
+                pub_results = await asyncio.gather(*pub_tasks, return_exceptions=True)
+                
+            # 认证来源用 auth_client 顺序请求（避免 httpx 连接复用问题）
+            auth_results = []
+            for source in auth_sources:
+                try:
+                    result = await self._fetch_source_notices(auth_client, source)
+                    auth_results.append(result)
+                except Exception as e:
+                    auth_results.append(e)
+            
+            return pub_results + auth_results
 
         results = await _fetch_all()
         all_selected = public_sources + auth_sources

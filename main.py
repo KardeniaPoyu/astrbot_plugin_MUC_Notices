@@ -33,6 +33,7 @@ for _module_name in (
     "command_utils",
     "subscription_store",
     "auth_service",
+    "notice_card",
 ):
     _load_local_module(_module_name)
 

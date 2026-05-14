@@ -1,0 +1,40 @@
+{
+  "rss_title": {
+    "description": "聚合 RSS 标题",
+    "type": "string",
+    "default": "中央民族大学多站点通知聚合"
+  },
+  "rss_max_items": {
+    "description": "RSS 保留条数",
+    "type": "int",
+    "default": 50
+  },
+  "poll_interval_minutes": {
+    "description": "轮询间隔（分钟）",
+    "type": "int",
+    "default": 15
+  },
+  "request_timeout_seconds": {
+    "description": "HTTP 请求超时（秒）",
+    "type": "int",
+    "default": 20
+  },
+  "muc_username": {
+    "description": "信息门户账号（学号/工号，用于登录抓取需要认证的站点）",
+    "type": "string",
+    "default": "",
+    "hint": "填写统一身份认证的用户名（学号或工号）。留空则只抓取无需登录的公开站点。"
+  },
+  "muc_password": {
+    "description": "信息门户密码",
+    "type": "string",
+    "default": "",
+    "hint": "填写统一身份认证的密码。密码将使用 SM2 国密加密传输，并以 Cookie 方式持久化，不会明文存储密码。"
+  },
+  "push_targets": {
+    "description": "主动推送目标会话 ID 列表",
+    "type": "list",
+    "default": [],
+    "hint": "在此配置需要主动推送通知的会话 ID（unified_msg_origin）。可通过 /muc_notice add_push_target 指令动态添加。"
+  }
+}

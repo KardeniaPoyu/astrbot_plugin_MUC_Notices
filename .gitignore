@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+muc_cookies.json
+*.egg
+.DS_Store
+*.log

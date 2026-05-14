@@ -88,14 +88,17 @@ class MucRssService:
                 ]
                 pub_results = await asyncio.gather(*pub_tasks, return_exceptions=True)
                 
-            # 认证来源用 auth_client 顺序请求（避免 httpx 连接复用问题）
+            # 认证来源顺序请求（取完一个再取下一个）
             auth_results = []
-            for source in auth_sources:
-                try:
-                    result = await self._fetch_source_notices(auth_client, source)
-                    auth_results.append(result)
-                except Exception as e:
-                    auth_results.append(e)
+            if auth_client:
+                for source in auth_sources:
+                    try:
+                        result = await self._fetch_source_notices(auth_client, source)
+                        auth_results.append(result)
+                        # 小延迟确保连接释放
+                        await asyncio.sleep(0.5)
+                    except Exception as e:
+                        auth_results.append(e)
             
             return pub_results + auth_results
 

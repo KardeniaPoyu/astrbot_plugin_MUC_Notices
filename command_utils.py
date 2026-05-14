@@ -48,5 +48,7 @@ def format_latest_lines(title: str, notices: list[Notice]) -> str:
     lines = [title]
     for item in notices:
         lines.append(f"- [{item['source']}] {item['date']} | {item['title']}")
-        lines.append(item["link"])
+        if item.get("summary"):
+            lines.append(f"  \u270d {item['summary']}")
+        lines.append(f"  \ud83d\udd17 {item['link']}")
     return "\n".join(lines)

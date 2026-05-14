@@ -272,7 +272,7 @@ class MucRssService:
                         from bs4 import BeautifulSoup
                         soup = BeautifulSoup(raw_content, "html.parser")
                         plain = soup.get_text(separator=" ", strip=True)
-                        # 取前 80 个字符作为摘要
+                        # 取前 500 个字符作为摘要预览
                         summary_text = plain[:80] + ("..." if len(plain) > 80 else "")
                     except Exception:
                         pass

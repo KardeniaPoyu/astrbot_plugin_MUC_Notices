@@ -1,11 +1,14 @@
 import asyncio
 import importlib.util
 import sys
+import os
+import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+from astrbot.api.message_components import Image, Plain
 from astrbot.api.event.filter import PermissionType
 from astrbot.api.star import Context, Star, register
 
@@ -35,6 +38,26 @@ for _module_name in (
 
 from auth_service import MucAuthService
 from command_utils import extract_command_args, format_latest_lines
+from notice_card import render_notices
+import tempfile
+
+def _render_and_send(event, notices: list, title: str = ""):
+    """渲染通知卡片图片并返回chain_result"""
+    if not notices:
+        return event.plain_result("暂未获取到通知。")
+    fd, tmp_path = tempfile.mkstemp(suffix=".png", prefix="muc_notice_")
+    os.close(fd)
+    try:
+        for n in notices:
+            if "source_key" in n and "source" not in n:
+                n["source"] = n["source_key"]
+        render_notices(notices[:5], tmp_path)
+        return event.chain_result([
+            Image.fromFileSystem(tmp_path)
+        ])
+    except Exception as e:
+        logger.error(f"渲染通知卡片失败: {e}")
+        return event.plain_result(format_latest_lines(title, notices))
 from rss_service import MucRssService, Notice
 from sources import SourceConfig, format_source_lines, resolve_source, SOURCES
 from subscription_store import SubscriptionStore
@@ -238,7 +261,7 @@ class MucNoticePlugin(Star):
     @muc_notice_group.command("latest")
     async def latest(self, event: AstrMessageEvent):
         notices = await self._rss_service.fetch_notices()
-        yield event.plain_result(format_latest_lines("最近通知", notices[:5]))
+        yield _render_and_send(event, notices[:5], "最近通知")
 
     @muc_notice_group.command("latest_source")
     async def latest_source(self, event: AstrMessageEvent):
@@ -259,9 +282,7 @@ class MucNoticePlugin(Star):
         if not notices:
             yield event.plain_result(f"来源 {source_name} 暂未抓取到通知。")
             return
-        yield event.plain_result(
-            format_latest_lines(f"最新通知：{source_name} ({source_key})", notices[:5])
-        )
+        yield _render_and_send(event, notices[:5], f"{source_name} ({source_key})")
 
     # ======================== 快捷查看指令 ========================
 
@@ -271,7 +292,7 @@ class MucNoticePlugin(Star):
         if not notices:
             yield event.plain_result("主站通知公告暂无通知。")
             return
-        yield event.plain_result(format_latest_lines("主站通知公告最近通知", notices[:5]))
+        yield _render_and_send(event, notices[:5], "主站通知公告")
 
     @muc_notice_group.command("latest_graduate")
     async def latest_graduate(self, event: AstrMessageEvent):
@@ -280,7 +301,7 @@ class MucNoticePlugin(Star):
         if not notices:
             yield event.plain_result("研究生院暂无通知。")
             return
-        yield event.plain_result(format_latest_lines("研究生院最近通知", notices[:5]))
+        yield _render_and_send(event, notices[:5], "研究生院")
 
     @muc_notice_group.command("latest_rsc")
     async def latest_rsc(self, event: AstrMessageEvent):
@@ -288,7 +309,7 @@ class MucNoticePlugin(Star):
         if not notices:
             yield event.plain_result("人事处暂无通知。")
             return
-        yield event.plain_result(format_latest_lines("人事处最近通知", notices[:5]))
+        yield _render_and_send(event, notices[:5], "人事处")
 
     @muc_notice_group.command("latest_cwc")
     async def latest_cwc(self, event: AstrMessageEvent):
@@ -296,7 +317,7 @@ class MucNoticePlugin(Star):
         if not notices:
             yield event.plain_result("财务处暂无通知。")
             return
-        yield event.plain_result(format_latest_lines("财务处最近通知", notices[:5]))
+        yield _render_and_send(event, notices[:5], "财务处")
 
     @muc_notice_group.command("latest_news")
     async def latest_news(self, event: AstrMessageEvent):
@@ -305,19 +326,16 @@ class MucNoticePlugin(Star):
         if not notices:
             yield event.plain_result("新闻网暂无新闻。")
             return
-        yield event.plain_result(format_latest_lines("新闻网最近新闻", notices[:5]))
+        yield _render_and_send(event, notices[:5], "新闻网")
 
     @muc_notice_group.command("latest_portal")
     async def latest_portal(self, event: AstrMessageEvent):
-        """查看信息门户最近 5 条通知（需登录）。"""
-        source_keys = {"my_bgtz", "my_jxtz", "my_kytz"}
+        source_keys = {"my_bgtz", "my_jktz", "my_kytz"}
         notices = await self._rss_service.fetch_notices(source_keys=source_keys)
         if not notices:
-            yield event.plain_result(
-                "信息门户暂无通知。需确保已配置正确的账号密码。"
-            )
+            yield event.plain_result("信息门户暂无通知。需确保已配置正确的账号密码。")
             return
-        yield event.plain_result(format_latest_lines("信息门户最近通知", notices[:5]))
+        yield _render_and_send(event, notices[:5], "信息门户")
 
     @muc_notice_group.command("login_status")
     async def login_status(self, event: AstrMessageEvent):

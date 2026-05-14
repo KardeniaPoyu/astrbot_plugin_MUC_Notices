@@ -253,7 +253,8 @@ class MucRssService:
                 if not title:
                     continue
                 notice_id = str(item.get("notice_id", ""))
-                link = f"https://my.muc.edu.cn/#/notice/noticeDetail?notice_id={notice_id}"
+                notice_type = source.get("api_params", {}).get("type", 5)
+                link = f"https://my.muc.edu.cn/page/11#/print?type={notice_type}&notice_id={notice_id}&show_type=1"
                 published_at = datetime.now(CHINA_TZ)
                 time_str = item.get("notice_release_time", "")
                 if time_str:

@@ -341,7 +341,15 @@ class MucNoticePlugin(Star):
         if not notices:
             yield event.plain_result("信息门户暂无通知。需确保已配置正确的账号密码。")
             return
-        yield _render_and_send(event, notices[:8], "信息门户")
+        # 每个来源各取最新2条，保证多样性
+        grouped = {}
+        for n in notices:
+            grouped.setdefault(n.get("source_key", ""), []).append(n)
+        balanced = []
+        for key in source_keys:
+            balanced.extend(grouped.get(key, [])[:2])
+        balanced.sort(key=lambda x: x["published_at"], reverse=True)
+        yield _render_and_send(event, balanced, "信息门户")
 
     @muc_notice_group.command("login_status")
     async def login_status(self, event: AstrMessageEvent):

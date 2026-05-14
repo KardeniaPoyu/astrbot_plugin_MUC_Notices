@@ -53,8 +53,13 @@ def _render_and_send(event, notices: list, title: str = ""):
             if "source_key" in n and "source" not in n:
                 n["source"] = n["source_key"]
         render_notices(notices[:5], tmp_path)
+        # 拼接链接列表
+        link_lines = ["\n\U0001f517 原文链接："]
+        for i, n in enumerate(notices[:5], 1):
+            link_lines.append(f"{i}. {n.get('link', '无链接')}")
         return event.chain_result([
-            Image.fromFileSystem(tmp_path)
+            Image.fromFileSystem(tmp_path),
+            Plain("\n".join(link_lines))
         ])
     except Exception as e:
         logger.error(f"渲染通知卡片失败: {e}")

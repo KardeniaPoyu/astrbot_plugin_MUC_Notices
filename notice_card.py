@@ -92,7 +92,7 @@ def render_notices(notices: list[dict], save_path: str):
         y = card_y
     
     # 底部
-    ax.text(4.25, 0.1, 'Powered by AstrBot', fontsize=7,
+    ax.text(4.25, 0.1, 'Powered by Azi', fontsize=7,
             color=MUC_GRAY, ha='center', va='bottom')
     
     fig.savefig(save_path, dpi=150, bbox_inches='tight', 

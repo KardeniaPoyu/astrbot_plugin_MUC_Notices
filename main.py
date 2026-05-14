@@ -437,50 +437,58 @@ class MucNoticePlugin(Star):
         source_subscriptions = await self._subscription_store.get_source_subscriptions()
         push_targets = set(self.config.get("push_targets", []))
 
-        all_recipients = set(global_sessions)
+        # 为每个 session 构建它应该收到的 items
+        session_to_items: dict[str, list[Notice]] = {}
+
         for item in items:
-            for session, source_keys in source_subscriptions.items():
-                if item["source_key"] in source_keys:
-                    all_recipients.add(session)
-        all_recipients.update(push_targets)
+            source_key = item["source_key"]
+            
+            # 全局订阅者和 push_targets 收到所有内容
+            for session in global_sessions | push_targets:
+                if session not in session_to_items:
+                    session_to_items[session] = []
+                session_to_items[session].append(item)
+                
+            # 部分订阅者只收到自己订阅的来源
+            for session, subscribed_keys in source_subscriptions.items():
+                if source_key in subscribed_keys and session not in global_sessions and session not in push_targets:
+                    if session not in session_to_items:
+                        session_to_items[session] = []
+                    session_to_items[session].append(item)
 
-        if not all_recipients or not items:
-            return
-
-        try:
-            fd, tmp_path = tempfile.mkstemp(suffix=".png", prefix="muc_push_")
-            os.close(fd)
-            for n in items:
-                if "source_key" in n and "source" not in n:
-                    n["source"] = n["source_key"]
-            render_notices(items, tmp_path)
-        except Exception as e:
-            logger.error(f"[MUC RSS] 渲染推送卡片失败: {e}")
-            for item in items:
-                summary = item.get("summary", "")
-                parts = [
-                    f"[MUC 新通知][{item['source']}]",
-                    item['title'],
-                ]
-                if summary:
-                    parts.append(summary)
-                parts.append(f"{item['date']} | \U0001f517 {item['link']}")
-                text = "\n".join(parts)
-                for umo in all_recipients:
-                    try:
-                        await self.context.send_message(umo, MessageChain().plain(text))
-                    except Exception as exc:
-                        logger.warning(f"[MUC RSS] 向会话推送失败 {umo}: {exc}")
-            return
-
-        for umo in all_recipients:
+        for session, session_items in session_to_items.items():
+            if not session_items:
+                continue
+                
             try:
+                fd, tmp_path = tempfile.mkstemp(suffix=".png", prefix=f"muc_push_{session}_")
+                os.close(fd)
+                for n in session_items:
+                    if "source_key" in n and "source" not in n:
+                        n["source"] = n["source_key"]
+                render_notices(session_items, tmp_path)
+                
                 await self.context.send_message(
-                    umo,
+                    session,
                     MessageChain(chain=[Image.fromFileSystem(tmp_path)])
                 )
-            except Exception as exc:
-                logger.warning(f"[MUC RSS] 向会话推送卡片失败 {umo}: {exc}")
+            except Exception as e:
+                logger.error(f"[MUC RSS] 向会话 {session} 渲染/推送卡片失败: {e}")
+                # 文本 fallback
+                for item in session_items:
+                    summary = item.get("summary", "")
+                    parts = [
+                        f"[MUC 新通知][{item['source']}]",
+                        item['title'],
+                    ]
+                    if summary:
+                        parts.append(summary)
+                    parts.append(f"{item['date']} | \U0001f517 {item['link']}")
+                    text = "\n".join(parts)
+                    try:
+                        await self.context.send_message(session, MessageChain().plain(text))
+                    except Exception as exc:
+                        logger.warning(f"[MUC RSS] 向会话推送文本失败 {session}: {exc}")
 
     def _resolve_source_from_event(
         self, event: AstrMessageEvent, command_name: str

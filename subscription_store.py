@@ -47,16 +47,20 @@ class SubscriptionStore:
             return set()
         return set(str(i) for i in ids)
 
-    async def save_pushed_ids(self, ids: set[str]):
-        """保存已推送通知 ID（最多保留 500 个）"""
-        id_list = list(ids)[:500]
-        await self._put_kv_data("muc_pushed_ids", id_list)
-
     async def mark_as_pushed(self, notice_ids: list[str]):
-        """标记通知为已推送"""
-        existing = await self.get_pushed_ids()
-        existing.update(notice_ids)
-        await self.save_pushed_ids(existing)
+        """标记通知为已推送，保持顺序并只保留最新的 500 个"""
+        existing_list = await self._get_kv_data("muc_pushed_ids", [])
+        if not isinstance(existing_list, list):
+            existing_list = []
+            
+        seen = set(existing_list)
+        for nid in notice_ids:
+            if str(nid) not in seen:
+                existing_list.append(str(nid))
+                seen.add(str(nid))
+                
+        # 截断时保留列表末尾（最新加入）的元素
+        await self._put_kv_data("muc_pushed_ids", existing_list[-500:])
 
     async def filter_new_notices(self, notice_ids: list[str]) -> list[str]:
         """返回尚未推送过的通知 ID"""

@@ -88,15 +88,20 @@ class MucRssService:
                 ]
                 pub_results = await asyncio.gather(*pub_tasks, return_exceptions=True)
                 
-            # 认证来源顺序请求（取完一个再取下一个）
+            # 认证来源各自独立client请求
             auth_results = []
-            if auth_client:
+            if auth_client and auth_sources:
                 for source in auth_sources:
                     try:
-                        result = await self._fetch_source_notices(auth_client, source)
-                        auth_results.append(result)
-                        # 小延迟确保连接释放
-                        await asyncio.sleep(0.5)
+                        async with httpx.AsyncClient(
+                            timeout=timeout_sec,
+                            follow_redirects=True,
+                        ) as ac:
+                            # 复制cookies到新client
+                            if hasattr(auth_client, 'cookies'):
+                                ac.cookies = auth_client.cookies
+                            result = await self._fetch_source_notices(ac, source)
+                            auth_results.append(result)
                     except Exception as e:
                         auth_results.append(e)
             

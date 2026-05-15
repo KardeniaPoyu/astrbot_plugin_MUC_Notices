@@ -63,6 +63,20 @@ sudo pacman -S noto-fonts-cjk wqy-microhei
 /plugin reload astrbot_plugin_MUC_Notices
 ```
 
+## 🧪 测试
+
+运行单元测试：
+```bash
+pip install pytest beautifulsoup4
+python -m pytest tests/ -v
+```
+
+当前测试覆盖（46 个测试）：
+- `test_parsers.py` — HTML 解析函数
+- `test_notice_card.py` — 字体配置与卡片渲染工具
+- `test_command_utils.py` — 命令格式化
+- `test_sources.py` — 数据源完整性验证
+
 ## ⚙️ 配置账号（信息门户）
 
 三种方式任选其一：

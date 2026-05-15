@@ -49,6 +49,8 @@ class MucRssService:
     def __init__(self, config: Optional[dict[str, Any]] = None, auth_service=None):
         self.config = config or {}
         self._auth_service = auth_service  # MucAuthService 实例
+        # 并发控制: 限制同时最多5个请求，避免对目标站点造成压力
+        self._semaphore = asyncio.Semaphore(5)
 
     async def fetch_notices(self, source_keys: Optional[set[str]] = None) -> list[Notice]:
         timeout_sec = self._cfg_int("request_timeout_seconds", 20)
@@ -84,9 +86,14 @@ class MucRssService:
                 follow_redirects=True,
                 headers=DEFAULT_HEADERS,
             ) as client:
-                # 公开来源用新 client 并发
+                # 并发控制包装函数
+                async def _fetch_limited(client, source):
+                    async with self._semaphore:
+                        return await self._fetch_source_notices(client, source)
+                
+                # 公开来源用新 client 并发（通过 semaphore 限制并发数）
                 pub_tasks = [
-                    self._fetch_source_notices(client, source)
+                    _fetch_limited(client, source)
                     for source in public_sources
                 ]
                 pub_results = await asyncio.gather(*pub_tasks, return_exceptions=True)

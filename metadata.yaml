@@ -1,4 +1,4 @@
-name: astrbort_plugin_MUC_Notices
+name: astrbot_plugin_MUC_Notices
 display_name: 中央民族大学通知新闻推送
 desc: 聚合爬取中央民族大学多个通知站点最新内容，向订阅会话推送最新通知。
 version: v1.0.0

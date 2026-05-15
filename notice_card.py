@@ -10,12 +10,39 @@ from matplotlib.patches import FancyBboxPatch
 import os
 import textwrap
 
-# 字体
-_FONT_PATH = "/root/AstrBot/data/plugins/astrbot_plugin_exchangerate_ICBC/fonts/NotoSansSC-Medium.ttf"
-if os.path.exists(_FONT_PATH):
-    fm.fontManager.addfont(_FONT_PATH)
-    plt.rcParams['font.sans-serif'] = ['Noto Sans SC']
-plt.rcParams['axes.unicode_minus'] = False
+# 字体配置 - 支持多种路径查找和fallback机制
+def _setup_font():
+    """设置中文字体，优先使用本地字体，fallback到系统字体"""
+    font_loaded = False
+    
+    # 尝试的字体路径（按优先级）
+    font_paths = [
+        # 插件本地字体目录（推荐）
+        os.path.join(os.path.dirname(__file__), 'fonts', 'NotoSansSC-Medium.ttf'),
+        # AstrBot 插件数据目录
+        os.path.join(os.path.dirname(__file__), '..', '..', 'fonts', 'NotoSansSC-Medium.ttf'),
+        # 常见系统路径
+        '/usr/share/fonts/truetype/noto/NotoSansSC-Medium.ttf',
+        'C:/Windows/Fonts/NotoSansSC-Medium.ttf',
+    ]
+    
+    for font_path in font_paths:
+        if font_path and os.path.exists(font_path):
+            try:
+                fm.fontManager.addfont(font_path)
+                plt.rcParams['font.sans-serif'] = ['Noto Sans SC'] + plt.rcParams['font.sans-serif']
+                font_loaded = True
+                break
+            except Exception:
+                continue
+    
+    # Fallback: 使用系统中文字体
+    if not font_loaded:
+        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB'] + plt.rcParams['font.sans-serif']
+    
+    plt.rcParams['axes.unicode_minus'] = False
+
+_setup_font()
 
 # 民大配色
 MUC_RED = '#b30216'

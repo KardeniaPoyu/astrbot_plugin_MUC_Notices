@@ -217,6 +217,12 @@ class MucAuthService:
                 json.dumps(cookies_data, ensure_ascii=False),
                 encoding="utf-8"
             )
+            # 设置文件权限为仅所有者可读写 (0o600)，防止其他用户读取敏感Cookie
+            try:
+                import stat
+                self.cookie_file_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+            except Exception as perm_exc:
+                logger.warning(f"[MUC AUTH] 设置Cookie文件权限失败: {perm_exc}")
             logger.info(f"[MUC AUTH] {len(cookies_data)} 个 Cookie 已保存")
         except Exception as exc:
             logger.warning(f"[MUC AUTH] 保存 Cookie 失败: {exc}")

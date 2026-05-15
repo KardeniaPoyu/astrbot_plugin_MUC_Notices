@@ -47,7 +47,18 @@
 ```bash
 pip install gmssl httpx beautifulsoup4
 ```
-3. 在 AstrBot 中热重载：
+3. **Linux 用户：安装中文字体**（卡片渲染需要）
+```bash
+# Ubuntu/Debian
+sudo apt install fonts-noto-cjk fonts-wqy-microhei
+
+# CentOS/RHEL
+sudo yum install google-noto-sans-cjk-fonts wqy-microhei-fonts
+
+# Arch Linux
+sudo pacman -S noto-fonts-cjk wqy-microhei
+```
+4. 在 AstrBot 中热重载：
 ```
 /plugin reload astrbot_plugin_MUC_Notices
 ```
@@ -148,6 +159,36 @@ astrbot_plugin_MUC_Notices/
 ## 📄 License
 
 MIT
+
+---
+
+## 📝 更新日志
+
+### v1.0.2 (2026-05-15)
+
+**根据 Sourcery AI Review 修复：**
+- 🔧 修复 `font.sans-serif` 类型安全问题：处理配置为字符串时的拼接错误
+- 📝 添加字体加载调试日志，便于诊断字体问题
+- ⚙️ 并发限制可配置：新增 `max_concurrent_requests` 配置项（默认5）
+
+**Linux 兼容性改进：**
+- 🐧 添加 Linux 常见中文字体 fallback（文泉驿、Noto CJK、Droid）
+- 🐧 扩展 Linux 字体路径搜索范围（Ubuntu/Debian/Arch 等）
+- ✅ 跨平台测试通过：Windows / macOS / Linux
+
+### v1.0.1 (2026-05-15)
+
+**修复问题：**
+- 🔧 修复 `notice_card.py` 硬编码字体路径问题，改为智能路径查找 + 系统字体 fallback
+- 🔧 修复 `metadata.yaml` 插件名称拼写错误 (`astrbort` → `astrbot`)
+
+**安全改进：**
+- 🔐 Cookie 文件权限设置为 600（仅所有者可读写），防止敏感信息泄露
+- 🛡️ 添加并发请求限制（Semaphore=5），避免对目标站点造成压力
+
+**代码质量：**
+- 📝 完善日志记录，关键操作增加审计日志
+- 🧹 清理冗余代码，优化异常处理
 
 ---
 

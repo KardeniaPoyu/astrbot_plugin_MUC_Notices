@@ -9,13 +9,77 @@ import matplotlib.font_manager as fm
 from matplotlib.patches import FancyBboxPatch
 import os
 import textwrap
+import logging
 
-# 字体
-_FONT_PATH = "/root/AstrBot/data/plugins/astrbot_plugin_exchangerate_ICBC/fonts/NotoSansSC-Medium.ttf"
-if os.path.exists(_FONT_PATH):
-    fm.fontManager.addfont(_FONT_PATH)
-    plt.rcParams['font.sans-serif'] = ['Noto Sans SC']
-plt.rcParams['axes.unicode_minus'] = False
+logger = logging.getLogger(__name__)
+
+
+def _normalize_font_list(value):
+    """
+    规范化 font.sans-serif 配置值为列表
+    处理 Matplotlib 配置中可能出现的字符串情况
+    """
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return value
+    return []
+
+
+# 字体配置 - 支持多种路径查找和fallback机制
+def _setup_font():
+    """设置中文字体，优先使用本地字体，fallback到系统字体"""
+    font_loaded = False
+    
+    # 尝试的字体路径（按优先级）
+    font_paths = [
+        # 插件本地字体目录（推荐）
+        os.path.join(os.path.dirname(__file__), 'fonts', 'NotoSansSC-Medium.ttf'),
+        # AstrBot 插件数据目录
+        os.path.join(os.path.dirname(__file__), '..', '..', 'fonts', 'NotoSansSC-Medium.ttf'),
+        # Linux 系统路径（常见发行版）
+        '/usr/share/fonts/truetype/noto/NotoSansSC-Medium.ttf',
+        '/usr/share/fonts/opentype/noto/NotoSansSC-Medium.ttc',
+        '/usr/share/fonts/noto-cjk/NotoSansSC-Medium.otf',
+        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+        # macOS 系统路径
+        '/System/Library/Fonts/PingFang.ttc',
+        # Windows 系统路径
+        'C:/Windows/Fonts/NotoSansSC-Medium.ttf',
+    ]
+    
+    for font_path in font_paths:
+        if font_path and os.path.exists(font_path):
+            try:
+                fm.fontManager.addfont(font_path)
+                # 规范化现有配置，防止字符串拼接问题
+                current = _normalize_font_list(plt.rcParams.get('font.sans-serif', []))
+                plt.rcParams['font.sans-serif'] = ['Noto Sans SC'] + current
+                font_loaded = True
+                logger.debug(f"[MUC Card] 字体加载成功: {font_path}")
+                break
+            except Exception as e:
+                logger.debug(f"[MUC Card] 字体加载失败 {font_path}: {e}")
+                continue
+    
+    # Fallback: 使用系统中文字体（跨平台：Linux / macOS / Windows）
+    if not font_loaded:
+        current = _normalize_font_list(plt.rcParams.get('font.sans-serif', []))
+        # Linux常见中文字体 + macOS + Windows
+        plt.rcParams['font.sans-serif'] = [
+            'WenQuanYi Micro Hei',      # Linux (Ubuntu, Debian)
+            'Noto Sans CJK SC',         # Linux (Noto CJK)
+            'Droid Sans Fallback',      # Linux (Android)
+            'PingFang SC',              # macOS
+            'Hiragino Sans GB',         # macOS
+            'SimHei',                    # Windows
+            'Microsoft YaHei'           # Windows
+        ] + current
+        logger.debug("[MUC Card] 使用系统 fallback 字体")
+    
+    plt.rcParams['axes.unicode_minus'] = False
+
+_setup_font()
 
 # 民大配色
 MUC_RED = '#b30216'

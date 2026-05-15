@@ -19,6 +19,12 @@
     "type": "int",
     "default": 20
   },
+  "max_concurrent_requests": {
+    "description": "最大并发请求数",
+    "type": "int",
+    "default": 5,
+    "hint": "限制同时向目标站点发送的请求数量，避免造成服务器压力。建议 3-10。"
+  },
   "muc_username": {
     "description": "信息门户账号（学号/工号，用于登录抓取需要认证的站点）",
     "type": "string",

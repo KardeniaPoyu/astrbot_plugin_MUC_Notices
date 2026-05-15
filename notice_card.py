@@ -37,8 +37,14 @@ def _setup_font():
         os.path.join(os.path.dirname(__file__), 'fonts', 'NotoSansSC-Medium.ttf'),
         # AstrBot 插件数据目录
         os.path.join(os.path.dirname(__file__), '..', '..', 'fonts', 'NotoSansSC-Medium.ttf'),
-        # 常见系统路径
+        # Linux 系统路径（常见发行版）
         '/usr/share/fonts/truetype/noto/NotoSansSC-Medium.ttf',
+        '/usr/share/fonts/opentype/noto/NotoSansSC-Medium.ttc',
+        '/usr/share/fonts/noto-cjk/NotoSansSC-Medium.otf',
+        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+        # macOS 系统路径
+        '/System/Library/Fonts/PingFang.ttc',
+        # Windows 系统路径
         'C:/Windows/Fonts/NotoSansSC-Medium.ttf',
     ]
     
@@ -56,10 +62,19 @@ def _setup_font():
                 logger.debug(f"[MUC Card] 字体加载失败 {font_path}: {e}")
                 continue
     
-    # Fallback: 使用系统中文字体
+    # Fallback: 使用系统中文字体（跨平台：Linux / macOS / Windows）
     if not font_loaded:
         current = _normalize_font_list(plt.rcParams.get('font.sans-serif', []))
-        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB'] + current
+        # Linux常见中文字体 + macOS + Windows
+        plt.rcParams['font.sans-serif'] = [
+            'WenQuanYi Micro Hei',      # Linux (Ubuntu, Debian)
+            'Noto Sans CJK SC',         # Linux (Noto CJK)
+            'Droid Sans Fallback',      # Linux (Android)
+            'PingFang SC',              # macOS
+            'Hiragino Sans GB',         # macOS
+            'SimHei',                    # Windows
+            'Microsoft YaHei'           # Windows
+        ] + current
         logger.debug("[MUC Card] 使用系统 fallback 字体")
     
     plt.rcParams['axes.unicode_minus'] = False

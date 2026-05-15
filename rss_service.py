@@ -24,8 +24,11 @@ DEFAULT_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 }
-DATE_PATTERN = re.compile(
+DATE_PATTERN_FULL = re.compile(
     r"(?P<year>\d{4})\s*(?:年|[-/.])\s*(?P<month>\d{1,2})\s*(?:月|[-/.])\s*(?P<day>\d{1,2})\s*日?"
+)
+DATE_PATTERN_SHORT = re.compile(
+    r"(?P<month>\d{1,2})\s*(?:月|[-/.])\s*(?P<day>\d{1,2})\s*日?"
 )
 
 
@@ -264,7 +267,7 @@ class MucRssService:
                 notice_id = str(item.get("notice_id", ""))
                 notice_type = source.get("api_params", {}).get("type", 5)
                 link = f"https://my.muc.edu.cn/page/11#/print?type={notice_type}&notice_id={notice_id}&show_type=1"
-                published_at = datetime.now(CHINA_TZ)
+                published_at = datetime(2000, 1, 1, tzinfo=CHINA_TZ)
                 time_val = item.get("notice_release_time")
                 if time_val:
                     try:
@@ -319,17 +322,20 @@ class MucRssService:
 
     def _extract_published_at(self, tag: Tag, source: SourceConfig) -> datetime:
         candidates = [
+            tag.get("title", ""),
             tag.get_text(" ", strip=True),
-            *self._iter_ancestor_texts(tag, depth=3),
+            *self._iter_ancestor_texts(tag, depth=5),
             self._collect_sibling_text(tag),
         ]
 
         for text in candidates:
-            extracted = self._parse_date(text)
+            if not text:
+                continue
+            extracted = self._parse_date(str(text))
             if extracted is not None:
                 return extracted
 
-        return datetime.now(CHINA_TZ)
+        return datetime(2000, 1, 1, tzinfo=CHINA_TZ)
 
     def _iter_ancestor_texts(self, tag: Tag, depth: int) -> Iterable[str]:
         current = tag.parent
@@ -362,17 +368,33 @@ class MucRssService:
         if not text:
             return None
 
-        match = DATE_PATTERN.search(text)
-        if not match:
-            return None
+        # 尝试完整日期 (YYYY-MM-DD)
+        match = DATE_PATTERN_FULL.search(text)
+        if match:
+            try:
+                year = int(match.group("year"))
+                month = int(match.group("month"))
+                day = int(match.group("day"))
+                return datetime(year, month, day, tzinfo=CHINA_TZ)
+            except ValueError:
+                pass
 
-        try:
-            year = int(match.group("year"))
-            month = int(match.group("month"))
-            day = int(match.group("day"))
-            return datetime(year, month, day, tzinfo=CHINA_TZ)
-        except ValueError:
-            return None
+        # 尝试短日期 (MM-DD)，假设为当前年
+        match = DATE_PATTERN_SHORT.search(text)
+        if match:
+            try:
+                now = datetime.now(CHINA_TZ)
+                month = int(match.group("month"))
+                day = int(match.group("day"))
+                # 如果月份大于当前月，可能是去年的
+                year = now.year
+                if month > now.month:
+                    year -= 1
+                return datetime(year, month, day, tzinfo=CHINA_TZ)
+            except ValueError:
+                pass
+
+        return None
 
     def _make_notice_id(self, source_key: str, link: str) -> str:
         digest = sha1(f"{source_key}|{link}".encode("utf-8")).hexdigest()

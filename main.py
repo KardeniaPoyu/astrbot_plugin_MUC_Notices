@@ -64,7 +64,8 @@ def _render_and_send(event, notices: list, title: str = ""):
     except Exception as e:
         logger.error(f"渲染通知卡片失败: {e}")
         return event.plain_result(format_latest_lines(title, notices))
-from rss_service import MucRssService, Notice
+from rss_service import MucRssService, Notice, CHINA_TZ
+from datetime import datetime, timedelta
 from sources import SourceConfig, format_source_lines, resolve_source, SOURCES
 from subscription_store import SubscriptionStore
 
@@ -424,10 +425,21 @@ class MucNoticePlugin(Star):
         new_ids = await self._subscription_store.filter_new_notices(
             [n["id"] for n in notices]
         )
-        new_notices = [n for n in notices if n["id"] in new_ids]
+        
+        # 过滤器：只推送 30 天内的通知，且排除了解析失败（2000年）的条目
+        now = datetime.now(CHINA_TZ)
+        threshold = now - timedelta(days=30)
+        
+        new_notices = []
+        for n in notices:
+            if n["id"] in new_ids:
+                pub_at = n["published_at"]
+                if pub_at.year > 2000 and pub_at > threshold:
+                    new_notices.append(n)
 
         if new_notices:
             await self._push_new_items(new_notices)
+            # 无论是否通过时间过滤，都标记为已推送，避免重复检查旧条目
             await self._subscription_store.mark_as_pushed(new_ids)
 
         return len(new_notices)

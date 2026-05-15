@@ -9,6 +9,22 @@ import matplotlib.font_manager as fm
 from matplotlib.patches import FancyBboxPatch
 import os
 import textwrap
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _normalize_font_list(value):
+    """
+    规范化 font.sans-serif 配置值为列表
+    处理 Matplotlib 配置中可能出现的字符串情况
+    """
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return value
+    return []
+
 
 # 字体配置 - 支持多种路径查找和fallback机制
 def _setup_font():
@@ -30,15 +46,21 @@ def _setup_font():
         if font_path and os.path.exists(font_path):
             try:
                 fm.fontManager.addfont(font_path)
-                plt.rcParams['font.sans-serif'] = ['Noto Sans SC'] + plt.rcParams['font.sans-serif']
+                # 规范化现有配置，防止字符串拼接问题
+                current = _normalize_font_list(plt.rcParams.get('font.sans-serif', []))
+                plt.rcParams['font.sans-serif'] = ['Noto Sans SC'] + current
                 font_loaded = True
+                logger.debug(f"[MUC Card] 字体加载成功: {font_path}")
                 break
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[MUC Card] 字体加载失败 {font_path}: {e}")
                 continue
     
     # Fallback: 使用系统中文字体
     if not font_loaded:
-        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB'] + plt.rcParams['font.sans-serif']
+        current = _normalize_font_list(plt.rcParams.get('font.sans-serif', []))
+        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB'] + current
+        logger.debug("[MUC Card] 使用系统 fallback 字体")
     
     plt.rcParams['axes.unicode_minus'] = False
 

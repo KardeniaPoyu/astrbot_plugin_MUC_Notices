@@ -49,8 +49,9 @@ class MucRssService:
     def __init__(self, config: Optional[dict[str, Any]] = None, auth_service=None):
         self.config = config or {}
         self._auth_service = auth_service  # MucAuthService 实例
-        # 并发控制: 限制同时最多5个请求，避免对目标站点造成压力
-        self._semaphore = asyncio.Semaphore(5)
+        # 并发控制: 限制同时请求数，避免对目标站点造成压力（可配置）
+        max_concurrent = self._cfg_int("max_concurrent_requests", 5)
+        self._semaphore = asyncio.Semaphore(max_concurrent)
 
     async def fetch_notices(self, source_keys: Optional[set[str]] = None) -> list[Notice]:
         timeout_sec = self._cfg_int("request_timeout_seconds", 20)

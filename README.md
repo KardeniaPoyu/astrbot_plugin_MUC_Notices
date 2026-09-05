@@ -108,9 +108,12 @@ export MUC_PASSWORD=密码
 | 命令 | 说明 |
 |------|------|
 | `/muc_notice set_account <学号> <密码>` | 设置登录账号 |
-| `/muc_notice add_push_target` | 添加推送目标 |
-| `/muc_notice remove_push_target` | 移除推送目标 |
+| `/muc_notice add_push_target` | 添加当前会话为推送目标 |
+| `/muc_notice remove_push_target` | 移除当前会话的推送目标 |
 | `/muc_notice list_push_targets` | 列出推送目标 |
+| `/muc_notice list_platforms` | 列出已连接的平台 ID |
+| `/muc_notice add_push_group <群号> [平台ID]` | 无需进群，直接把指定群加为推送目标；只连接一个平台时可省略平台ID |
+| `/muc_notice remove_push_group <群号> [平台ID]` | 无需进群，直接移除指定群的推送目标 |
 
 ### 示例
 ```

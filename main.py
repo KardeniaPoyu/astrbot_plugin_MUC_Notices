@@ -260,6 +260,86 @@ class MucNoticePlugin(Star):
             lines.append(f"- {target}")
         yield event.plain_result("\n".join(lines))
 
+    @muc_notice_group.command("list_platforms")
+    @filter.permission_type(PermissionType.ADMIN)
+    async def list_platforms(self, event: AstrMessageEvent):
+        platform_ids = [p.meta().id for p in self.context.platform_manager.platform_insts]
+        if not platform_ids:
+            yield event.plain_result("当前没有已连接的消息平台。")
+            return
+        lines = ["已连接平台 ID："] + [f"- {pid}" for pid in platform_ids]
+        yield event.plain_result("\n".join(lines))
+
+    @muc_notice_group.command("add_push_group")
+    @filter.permission_type(PermissionType.ADMIN)
+    async def add_push_group(self, event: AstrMessageEvent):
+        args = extract_command_args(event, "add_push_group")
+        parts = args.split()
+        if not parts:
+            yield event.plain_result(
+                "用法：/muc_notice add_push_group <群号> [平台ID]\n"
+                "不填平台ID时，若只连接了一个平台会自动使用；"
+                "连接了多个平台时请先用 /muc_notice list_platforms 查看后指定。"
+            )
+            return
+
+        group_id = parts[0]
+        platform_id = parts[1] if len(parts) > 1 else None
+        if platform_id is None:
+            platform_ids = [p.meta().id for p in self.context.platform_manager.platform_insts]
+            if not platform_ids:
+                yield event.plain_result("当前没有已连接的消息平台。")
+                return
+            if len(platform_ids) > 1:
+                lines = ["检测到多个平台，请指定平台ID：", *[f"- {pid}" for pid in platform_ids]]
+                yield event.plain_result("\n".join(lines))
+                return
+            platform_id = platform_ids[0]
+
+        umo = f"{platform_id}:GroupMessage:{group_id}"
+        push_targets = self.config.get("push_targets", [])
+        if not isinstance(push_targets, list):
+            push_targets = []
+        if umo in push_targets:
+            yield event.plain_result(f"该群已是推送目标：{umo}")
+            return
+        push_targets.append(umo)
+        self.config["push_targets"] = push_targets
+        self.config.save_config()
+        yield event.plain_result(f"已添加推送目标群：{umo}")
+
+    @muc_notice_group.command("remove_push_group")
+    @filter.permission_type(PermissionType.ADMIN)
+    async def remove_push_group(self, event: AstrMessageEvent):
+        args = extract_command_args(event, "remove_push_group")
+        parts = args.split()
+        if not parts:
+            yield event.plain_result("用法：/muc_notice remove_push_group <群号> [平台ID]")
+            return
+
+        group_id = parts[0]
+        platform_id = parts[1] if len(parts) > 1 else None
+        if platform_id is None:
+            platform_ids = [p.meta().id for p in self.context.platform_manager.platform_insts]
+            if len(platform_ids) != 1:
+                yield event.plain_result(
+                    "无法确定平台ID，请显式指定：/muc_notice remove_push_group <群号> <平台ID>"
+                )
+                return
+            platform_id = platform_ids[0]
+
+        umo = f"{platform_id}:GroupMessage:{group_id}"
+        push_targets = self.config.get("push_targets", [])
+        if not isinstance(push_targets, list):
+            push_targets = []
+        if umo in push_targets:
+            push_targets.remove(umo)
+            self.config["push_targets"] = push_targets
+            self.config.save_config()
+            yield event.plain_result(f"已移除推送目标群：{umo}")
+        else:
+            yield event.plain_result(f"该群不是推送目标：{umo}")
+
     @muc_notice_group.command("rss")
     async def show_rss_info(self, event: AstrMessageEvent):
         path = self._rss_service.rss_file_path
@@ -387,6 +467,7 @@ class MucNoticePlugin(Star):
         username, password = parts[0], parts[1]
         self.config["muc_username"] = username
         self.config["muc_password"] = password
+        self.config.save_config()
         self._auth_service = MucAuthService(self.config)
         self._rss_service = MucRssService(self.config, auth_service=self._auth_service)
         yield event.plain_result(f"账号已设置为 {username}，正在尝试登录...")
@@ -552,6 +633,9 @@ class MucNoticePlugin(Star):
             "- /muc_notice add_push_target: 添加当前会话为推送目标",
             "- /muc_notice remove_push_target: 移除当前会话的推送目标",
             "- /muc_notice list_push_targets: 列出所有推送目标",
+            "- /muc_notice list_platforms: 列出已连接的平台ID",
+            "- /muc_notice add_push_group <群号> [平台ID]: 免入群直接添加指定群为推送目标",
+            "- /muc_notice remove_push_group <群号> [平台ID]: 免入群移除指定群的推送目标",
             "",
             "配置项:",
             "- rss_title: RSS 标题",

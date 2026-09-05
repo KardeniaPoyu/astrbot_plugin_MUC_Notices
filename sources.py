@@ -115,9 +115,9 @@ SOURCES: list[SourceConfig] = [
     # ========== 新闻网 - 学术 ==========
     {
         "key": "news_xs",
-        "name": "新闻网 - 学术动态",
-        "url": "https://news.muc.edu.cn/",
-        "selector": "a.zi3",
+        "name": "新闻网 - 教学科研",
+        "url": "https://news.muc.edu.cn/jxky.htm",
+        "selector": "h4 a",
         "parser": parse_title_attr,
         "category": "news",
         "base_url": "https://news.muc.edu.cn/",

@@ -13,11 +13,13 @@ import httpx
 
 from astrbot.api import logger
 
-MUC_SM2_PUBLIC_KEY = (
+# 兜底公钥：仅在页面中未能解析出实时公钥时使用。CAS 服务端会不定期轮换该公钥，
+# 因此正常流程下应始终优先使用 `_do_login` 从登录页面动态提取到的公钥。
+MUC_SM2_PUBLIC_KEY_FALLBACK = (
     "BMgXvoCLbC9cF8JAS/bv6Gd82+K+fFC2nRi7QJO3GvDkx0iLBmqDMpQUBxjC3yTfXN83cPVZRplPDsvr92K4omA="
 )
 LOGIN_PAGE_URL = "https://ca.muc.edu.cn/zfca/login"
-PORTAL_SERVICE = "http://my.muc.edu.cn/user/simpleSSOLogin"
+PORTAL_SERVICE = "https://my.muc.edu.cn/user/simpleSSOLogin"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -119,8 +121,16 @@ class MucAuthService:
                 return False
             flow_id = m.group(1)
 
+            # 提取实时 SM2 公钥。该公钥由服务端不定期轮换，硬编码会导致密码加密错误、
+            # 认证静默失败（但重定向链仍可能落回 my.muc.edu.cn 返回 200），
+            # 因此必须每次从登录页面动态解析。
+            pk_match = re.search(r'"publicKey"\s*:\s*"([^"]+)"', html)
+            sm2_public_key = pk_match.group(1) if pk_match else MUC_SM2_PUBLIC_KEY_FALLBACK
+            if not pk_match:
+                logger.warning("[MUC AUTH] 未能从登录页解析 SM2 公钥，使用兜底公钥（可能已过期）。")
+
             # SM2 加密密码
-            encrypted_password = await self._sm2_encrypt(self.password)
+            encrypted_password = await self._sm2_encrypt(self.password, sm2_public_key)
 
             # 提交登录
             resp = await client.post(
@@ -132,6 +142,7 @@ class MucAuthService:
                     "flowId": flow_id,
                     "captcha": "", "delegator": "", "tokenCode": "",
                     "continue": "", "asserts": "", "submit": "登录",
+                    "pageFrom": "",
                 },
                 headers={
                     "Referer": login_url,
@@ -151,8 +162,14 @@ class MucAuthService:
                 max_redirects -= 1
 
             if "my.muc.edu.cn" in str(resp.url) and resp.status_code == 200:
-                logger.info("[MUC AUTH] 登录成功！")
-                return True
+                # 落回 my.muc.edu.cn 且状态码 200 并不代表登录真正成功
+                # （例如密码用错误的 SM2 公钥加密时，CAS 也可能把请求送回一个普通页面）。
+                # 必须实际调用一次业务接口，确认会话对后端可用后才能判定成功。
+                if await self._verify_login(client):
+                    logger.info("[MUC AUTH] 登录成功！")
+                    return True
+                logger.warning("[MUC AUTH] 重定向落回 my.muc.edu.cn，但会话校验未通过（登录实际失败）。")
+                return False
 
             logger.warning(f"[MUC AUTH] 登录异常，最终URL={resp.url}, 状态码={resp.status_code}")
             return False
@@ -161,10 +178,10 @@ class MucAuthService:
             logger.error(f"[MUC AUTH] 登录异常：{exc}")
             return False
 
-    async def _sm2_encrypt(self, plaintext: str) -> str:
+    async def _sm2_encrypt(self, plaintext: str, public_key_b64: str) -> str:
         try:
             from gmssl.sm2 import CryptSM2
-            pubkey_bytes = base64.b64decode(MUC_SM2_PUBLIC_KEY)
+            pubkey_bytes = base64.b64decode(public_key_b64)
             if len(pubkey_bytes) == 65 and pubkey_bytes[0] == 0x04:
                 x_hex = pubkey_bytes[1:33].hex()
                 y_hex = pubkey_bytes[33:65].hex()

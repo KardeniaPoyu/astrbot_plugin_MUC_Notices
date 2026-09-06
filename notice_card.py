@@ -6,12 +6,31 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
-from matplotlib.patches import FancyBboxPatch
+import matplotlib.image as mpimg
+from matplotlib.patches import FancyBboxPatch, Circle
+from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 import os
 import textwrap
 import logging
 
 logger = logging.getLogger(__name__)
+
+_BADGE_PATH = os.path.join(os.path.dirname(__file__), 'assets', 'muc_badge.png')
+_badge_img = None
+_badge_load_failed = False
+
+
+def _load_badge():
+    """懒加载校徽图片，加载失败时缓存失败状态，避免每张卡片重复尝试。"""
+    global _badge_img, _badge_load_failed
+    if _badge_img is not None or _badge_load_failed:
+        return _badge_img
+    try:
+        _badge_img = mpimg.imread(_BADGE_PATH)
+    except Exception as e:
+        logger.warning(f"[MUC Card] 校徽图片加载失败: {e}")
+        _badge_load_failed = True
+    return _badge_img
 
 
 def _normalize_font_list(value):
@@ -199,10 +218,23 @@ def render_notices(notices: list[dict], save_path: str):
                              boxstyle="round,pad=0,rounding_size=0.12",
                              facecolor=MUC_RED, edgecolor='none')
     ax.add_patch(header)
-    # 左侧小圆点作为视觉锚点，替代不可靠的 emoji 渲染
-    ax.add_patch(plt.Circle((left + 0.32, y - header_h / 2 + 0.06), 0.045,
-                             facecolor=WHITE, edgecolor='none', alpha=0.85))
-    ax.text(left + 0.55, y - header_h / 2 + 0.06, '中央民族大学 · 通知聚合',
+    # 校徽放标题栏左上角，半透明叠加在深红底色上（图片背景已抠成透明，
+    # 不再垫白色圆盘——那样会在校徽本身的红色和标题栏的深红之间形成硬边，显得不协调）。
+    badge_cx, badge_cy = left + 0.34, y - header_h / 2
+    badge_img = _load_badge()
+    title_x = left + 0.62
+    if badge_img is not None:
+        badge_box = OffsetImage(badge_img, zoom=0.13, alpha=0.55)
+        badge_box.image.axes = ax
+        ab = AnnotationBbox(badge_box, (badge_cx, badge_cy), frameon=False,
+                             pad=0, zorder=3)
+        ax.add_artist(ab)
+    else:
+        # 校徽图片缺失时的兜底：小圆点视觉锚点
+        ax.add_patch(Circle((badge_cx, badge_cy), 0.045, facecolor=WHITE,
+                             edgecolor='none', alpha=0.85))
+        title_x = left + 0.55
+    ax.text(title_x, y - header_h / 2, '中央民族大学 · 通知聚合',
             fontsize=13.5, fontweight='bold', ha='left', va='center', color=WHITE)
     ax.text(right - 0.3, y - header_h / 2 - 0.12, f'共 {n} 条通知',
             fontsize=8, ha='right', va='center', color='#f0d9de')

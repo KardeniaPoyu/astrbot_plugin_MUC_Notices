@@ -678,6 +678,14 @@ class MucNoticePlugin(Star):
             logger.info(f"[MUC RSS] 每日总结：过去 {lookback}h 无新通知，跳过")
             return None
 
+        # 门户来源本身带正文；web 抓取来源只有标题，这里补抓原文正文
+        try:
+            await self._rss_service.enrich_contents(
+                recent, limit=self._cfg_int("daily_summary_fetch_limit", 15)
+            )
+        except Exception as exc:
+            logger.warning(f"[MUC RSS] 补抓正文失败（忽略）：{exc}")
+
         summary = await self._summarize_notices(recent, lookback)
         if summary:
             await self._push_text(summary)
@@ -691,28 +699,29 @@ class MucNoticePlugin(Star):
             logger.warning("[MUC RSS] 无可用 LLM，跳过每日总结")
             return None
 
-        items = notices[:30]  # 防止某天通知过多把上下文撑爆
-        rows = []
-        for n in items:
-            extra = (n.get("summary") or "").strip()
-            rows.append(
-                f"- [{n['source']}] {n['title']}｜发布于 {n['date']}"
-                + (f"｜摘要：{extra}" if extra else "")
+        items = notices[:25]  # 防止某天通知过多把上下文撑爆
+        blocks = []
+        for i, n in enumerate(items, 1):
+            body = (n.get("content") or n.get("summary") or "").strip()
+            body = body[:700] if body else "（未取到正文，只有标题）"
+            blocks.append(
+                f"【{i}】来源：{n['source']}｜发布：{n['date']}\n"
+                f"标题：{n['title']}\n正文：{body}"
             )
-        listing = "\n".join(rows)
+        listing = "\n\n".join(blocks)
 
         system_prompt = (
-            "你是中央民族大学的通知助理。用户给你一份过去一段时间学校各部门发布的通知清单，"
-            "你要汇总成一条「今日通知速览」，直接发到学生群里。要求：\n"
-            "1. 开头用一句话总括今天主要有哪几类事。\n"
-            "2. 然后按重要程度分点（最多 8 点），每点一行，一句话说清这条通知是什么、面向谁。\n"
-            "3. 【严格】只能写清单里真实出现的通知，一条都不能多加、不能合并杜撰。\n"
-            "4. 【严格】清单里的日期是『发布日期』，不是截止/报名/考试日期。除非某条的标题或摘要里"
-            "明确写了具体的截止时间 / 报名时间 / 考试时间 / 地点，否则不要提任何时间和地点，"
-            "更不能把发布日期当成截止日期。\n"
-            "5. 涉及报名、缴费、补考、四六级、放假、班车调整这类和学生切身相关的，排前面。\n"
-            "6. 全文 400 字以内，不要客套话、不要逐条照抄完整标题。\n"
-            "7. 拿不准的条目宁可不写，不要为了凑数硬编。"
+            "你是中央民族大学的通知助理。用户给你过去一段时间学校各部门发布的通知，"
+            "每条含标题和正文（部分可能只有标题）。你要**读正文**后汇总成一条"
+            "「今日通知速览」，直接发到学生群里。要求：\n"
+            "1. 开头一句话总括今天主要有哪几类事。\n"
+            "2. 按重要程度分点（最多 8 点），每点一行。要从正文里提炼**真正有用的信息**："
+            "面向谁、要做什么、截止/时间/地点、怎么办理，而不是复述标题。\n"
+            "3. 【严格】只写清单里真实出现的通知，不合并杜撰、不无中生有。\n"
+            "4. 时间地点等只在正文里明确写了才写；「发布日期」不是截止日期，别混。\n"
+            "5. 报名、缴费、补考、四六级、选课、放假、班车调整这类和学生切身相关的排前面。\n"
+            "6. 全文 450 字以内，不要客套话。\n"
+            "7. 正文没读到关键信息、或某条拿不准，就简略带过或不写，别硬编。"
         )
         prompt = (
             f"以下是过去 {lookback} 小时中央民族大学发布的通知，共 {len(items)} 条"

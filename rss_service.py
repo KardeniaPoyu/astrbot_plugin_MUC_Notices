@@ -42,7 +42,8 @@ class Notice(TypedDict):
     date: str
     pub_date: str
     published_at: datetime
-    summary: str  # 内容摘要/预览
+    summary: str  # 内容摘要/预览（卡片用，短）
+    content: str  # 正文纯文本（AI 速览用，可能较长；web 来源默认空，需 enrich_contents 补）
 
 
 class MucRssService:
@@ -233,6 +234,7 @@ class MucRssService:
                         "pub_date": published_at.strftime("%a, %d %b %Y %H:%M:%S +0800"),
                         "published_at": published_at,
                         "summary": "",
+                        "content": "",
                     }
                 )
                 seen_links.add(full_url)
@@ -298,16 +300,18 @@ class MucRssService:
                                     published_at = parsed
                     except Exception:
                         pass
-                # 提取纯文本摘要（去掉HTML标签）
+                # 提取纯文本：summary 是短预览（卡片），content 是较完整正文（AI 速览）
                 raw_content = item.get("notice_content", "")
                 summary_text = ""
+                content_text = ""
                 if raw_content:
                     try:
                         from bs4 import BeautifulSoup
                         soup = BeautifulSoup(raw_content, "html.parser")
                         plain = soup.get_text(separator=" ", strip=True)
-                        # 取前 500 个字符作为摘要预览
+                        plain = re.sub(r"\s+", " ", plain).strip()
                         summary_text = plain[:80] + ("..." if len(plain) > 80 else "")
+                        content_text = plain[:2000]
                     except Exception:
                         pass
 
@@ -322,6 +326,7 @@ class MucRssService:
                     "pub_date": published_at.strftime("%a, %d %b %Y %H:%M:%S +0800"),
                     "published_at": published_at,
                     "summary": summary_text,
+                    "content": content_text,
                 })
             return notices
         except Exception as exc:
@@ -412,6 +417,50 @@ class MucRssService:
         headers = dict(DEFAULT_HEADERS)
         headers["Referer"] = source.get("base_url") or request_url or source["url"]
         return headers
+
+    # 文章正文里常见的容器（民大各站基本是织梦/CMS 那套）
+    _ARTICLE_SELECTORS = (
+        ".v_news_content", ".content", ".article-content", ".TRS_Editor",
+        "#vsb_content", ".wp_articlecontent", "#zoom", ".news_content", "article",
+    )
+
+    async def enrich_contents(self, notices: list["Notice"], limit: int = 15) -> None:
+        """为 content 为空的通知（一般是 web 抓取来源）逐条抓取原文正文，原地写回 content。
+
+        只处理前 limit 条，短超时 + 并发受 self._semaphore 限制，任何失败静默跳过。
+        """
+        targets = [
+            n for n in notices
+            if not (n.get("content") or "").strip() and (n.get("link") or "").startswith("http")
+        ][:limit]
+        if not targets:
+            return
+
+        timeout = min(self._cfg_int("request_timeout_seconds", 20), 15)
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=timeout, headers=DEFAULT_HEADERS
+        ) as client:
+            async def _one(n: "Notice") -> None:
+                async with self._semaphore:
+                    try:
+                        r = await client.get(n["link"])
+                        r.raise_for_status()
+                        soup = BeautifulSoup(r.text, "html.parser")
+                        node = None
+                        for sel in self._ARTICLE_SELECTORS:
+                            node = soup.select_one(sel)
+                            if node:
+                                break
+                        node = node or soup.body or soup
+                        for bad in node.select("script, style, nav, header, footer"):
+                            bad.decompose()
+                        text = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+                        if len(text) >= 20:
+                            n["content"] = text[:2000]
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug(f"[MUC RSS] 抓正文失败 {n.get('link')}: {exc}")
+
+            await asyncio.gather(*(_one(n) for n in targets))
 
     def _cfg_int(self, key: str, default: int) -> int:
         try:

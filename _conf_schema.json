@@ -37,6 +37,12 @@
     "default": 24,
     "hint": "汇总最近这么多小时内发布的通知。"
   },
+  "daily_summary_fetch_limit": {
+    "description": "每日速览补抓正文的最大条数",
+    "type": "int",
+    "default": 15,
+    "hint": "信息门户来源自带正文；其它 web 抓取来源只有标题，速览时会额外访问原文页提取正文，此项限制额外请求数以免负载过高。"
+  },
   "request_timeout_seconds": {
     "description": "HTTP 请求超时（秒）",
     "type": "int",

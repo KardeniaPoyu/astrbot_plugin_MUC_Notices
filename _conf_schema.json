@@ -12,7 +12,30 @@
   "poll_interval_minutes": {
     "description": "轮询间隔（分钟）",
     "type": "int",
-    "default": 15
+    "default": 240,
+    "hint": "学校通知时效性不强，默认 4 小时一次即可；配合每日 AI 速览使用体验更好。"
+  },
+  "daily_summary_enable": {
+    "description": "启用每日 AI 通知速览",
+    "type": "bool",
+    "default": true,
+    "hint": "每天定时把过去一段时间的新通知交给大模型汇总成一条「速览」，推送到 push_targets / 已订阅会话。需要 AstrBot 已配置可用的聊天大模型。"
+  },
+  "daily_summary_hour": {
+    "description": "每日速览推送 - 时（0-23，北京时间）",
+    "type": "int",
+    "default": 8
+  },
+  "daily_summary_minute": {
+    "description": "每日速览推送 - 分（0-59）",
+    "type": "int",
+    "default": 0
+  },
+  "daily_summary_lookback_hours": {
+    "description": "每日速览回溯时长（小时）",
+    "type": "int",
+    "default": 24,
+    "hint": "汇总最近这么多小时内发布的通知。"
   },
   "request_timeout_seconds": {
     "description": "HTTP 请求超时（秒）",

@@ -100,6 +100,7 @@ class MucNoticePlugin(Star):
         if _ENV_PASSWORD and not self.config.get("muc_password"):
             self.config["muc_password"] = _ENV_PASSWORD
         self._poll_task: Optional[asyncio.Task] = None
+        self._summary_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
         self._auth_service = MucAuthService(self.config)
         self._rss_service = MucRssService(self.config, auth_service=self._auth_service)
@@ -108,16 +109,19 @@ class MucNoticePlugin(Star):
     async def initialize(self):
         self._stop_event.clear()
         self._poll_task = asyncio.create_task(self._polling_loop())
+        if self._cfg_bool("daily_summary_enable", True):
+            self._summary_task = asyncio.create_task(self._daily_summary_loop())
         logger.info("[MUC RSS] 插件初始化完成，多源轮询任务已启动。")
 
     async def terminate(self):
         self._stop_event.set()
-        if self._poll_task and not self._poll_task.done():
-            self._poll_task.cancel()
-            try:
-                await self._poll_task
-            except asyncio.CancelledError:
-                pass
+        for task in (self._poll_task, self._summary_task):
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
         await self._auth_service.close()
         logger.info("[MUC RSS] 插件已停止。")
 
@@ -217,6 +221,23 @@ class MucNoticePlugin(Star):
     async def check_now(self, event: AstrMessageEvent):
         count = await self._run_check(push=True)
         yield event.plain_result(f"已检查更新，共发现 {count} 条新通知。")
+
+    @muc_notice_group.command("summary")
+    @filter.permission_type(PermissionType.ADMIN)
+    async def summary_now(self, event: AstrMessageEvent):
+        """立即生成一次今日 AI 通知速览并推送。"""
+        yield event.plain_result("正在生成今日通知速览…")
+        try:
+            text = await self._run_daily_summary(force=True)
+        except Exception as exc:
+            yield event.plain_result(f"生成失败：{exc}")
+            return
+        if text:
+            yield event.plain_result(text)
+        else:
+            yield event.plain_result(
+                f"过去 {self._cfg_int('daily_summary_lookback_hours', 24)} 小时没有新通知，或 LLM 不可用。"
+            )
 
     @muc_notice_group.command("add_push_target")
     @filter.permission_type(PermissionType.ADMIN)
@@ -604,6 +625,120 @@ class MucNoticePlugin(Star):
         except (ValueError, TypeError):
             return default
 
+    def _cfg_bool(self, key: str, default: bool) -> bool:
+        v = self.config.get(key, default)
+        if isinstance(v, str):
+            return v.strip().lower() in ("1", "true", "yes", "on")
+        return bool(v)
+
+    # ==================== 每日 AI 通知总结 ====================
+
+    def _seconds_until_next_summary(self) -> float:
+        hour = max(0, min(23, self._cfg_int("daily_summary_hour", 8)))
+        minute = max(0, min(59, self._cfg_int("daily_summary_minute", 0)))
+        now = datetime.now(CHINA_TZ)
+        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        return (target - now).total_seconds()
+
+    async def _daily_summary_loop(self):
+        while not self._stop_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._stop_event.wait(), timeout=self._seconds_until_next_summary()
+                )
+                break
+            except asyncio.TimeoutError:
+                pass
+            if not self._cfg_bool("daily_summary_enable", True):
+                continue
+            try:
+                await self._run_daily_summary()
+            except Exception as exc:
+                logger.error(f"[MUC RSS] 每日总结失败：{exc}")
+
+    async def _run_daily_summary(self, force: bool = False) -> Optional[str]:
+        """收集回溯窗口内的通知，交给 LLM 生成速览并推送。返回速览文本 / None。"""
+        today = datetime.now(CHINA_TZ).strftime("%Y-%m-%d")
+        if not force and await self.get_kv_data("last_summary_date", "") == today:
+            return None
+
+        lookback = self._cfg_int("daily_summary_lookback_hours", 24)
+        notices = await self._rss_service.fetch_notices()
+        cutoff = datetime.now(CHINA_TZ) - timedelta(hours=lookback)
+        recent = [
+            n for n in notices
+            if n["published_at"].year > 2000 and n["published_at"] >= cutoff
+        ]
+        recent.sort(key=lambda n: n["published_at"], reverse=True)
+
+        if not recent:
+            await self.put_kv_data("last_summary_date", today)
+            logger.info(f"[MUC RSS] 每日总结：过去 {lookback}h 无新通知，跳过")
+            return None
+
+        summary = await self._summarize_notices(recent, lookback)
+        if summary:
+            await self._push_text(summary)
+            logger.info(f"[MUC RSS] 每日总结已推送（{len(recent)} 条通知）")
+        await self.put_kv_data("last_summary_date", today)
+        return summary
+
+    async def _summarize_notices(self, notices: list[Notice], lookback: int) -> Optional[str]:
+        provider = self.context.get_using_provider()
+        if provider is None:
+            logger.warning("[MUC RSS] 无可用 LLM，跳过每日总结")
+            return None
+
+        items = notices[:30]  # 防止某天通知过多把上下文撑爆
+        rows = []
+        for n in items:
+            extra = (n.get("summary") or "").strip()
+            rows.append(
+                f"- [{n['source']}] {n['title']}｜发布于 {n['date']}"
+                + (f"｜摘要：{extra}" if extra else "")
+            )
+        listing = "\n".join(rows)
+
+        system_prompt = (
+            "你是中央民族大学的通知助理。用户给你一份过去一段时间学校各部门发布的通知清单，"
+            "你要汇总成一条「今日通知速览」，直接发到学生群里。要求：\n"
+            "1. 开头用一句话总括今天主要有哪几类事。\n"
+            "2. 然后按重要程度分点（最多 8 点），每点一行，一句话说清这条通知是什么、面向谁。\n"
+            "3. 【严格】只能写清单里真实出现的通知，一条都不能多加、不能合并杜撰。\n"
+            "4. 【严格】清单里的日期是『发布日期』，不是截止/报名/考试日期。除非某条的标题或摘要里"
+            "明确写了具体的截止时间 / 报名时间 / 考试时间 / 地点，否则不要提任何时间和地点，"
+            "更不能把发布日期当成截止日期。\n"
+            "5. 涉及报名、缴费、补考、四六级、放假、班车调整这类和学生切身相关的，排前面。\n"
+            "6. 全文 400 字以内，不要客套话、不要逐条照抄完整标题。\n"
+            "7. 拿不准的条目宁可不写，不要为了凑数硬编。"
+        )
+        prompt = (
+            f"以下是过去 {lookback} 小时中央民族大学发布的通知，共 {len(items)} 条"
+            f"（按发布时间倒序）：\n\n{listing}"
+        )
+        try:
+            resp = await provider.text_chat(prompt=prompt, system_prompt=system_prompt)
+            text = (getattr(resp, "completion_text", "") or "").strip()
+        except Exception as exc:
+            logger.error(f"[MUC RSS] LLM 总结请求失败：{exc}")
+            return None
+        if not text:
+            return None
+        header = f"📮 民大今日通知速览 · {datetime.now(CHINA_TZ).strftime('%m月%d日')}\n\n"
+        footer = f"\n\n— AI 依据学校官网自动汇总，共 {len(items)} 条，可能有遗漏，以官方通知原文为准"
+        return header + text + footer
+
+    async def _push_text(self, text: str):
+        global_sessions = set(await self._subscription_store.get_global_sessions())
+        push_targets = set(self.config.get("push_targets", []))
+        for session in global_sessions | push_targets:
+            try:
+                await self.context.send_message(session, MessageChain().plain(text))
+            except Exception as exc:
+                logger.warning(f"[MUC RSS] 每日总结推送失败 {session}: {exc}")
+
     def _help_text(self) -> str:
         auth_count = sum(1 for s in SOURCES if s.get("requires_auth", False))
         lines = [
@@ -630,6 +765,7 @@ class MucNoticePlugin(Star):
             "- /muc_notice rss: 查看 RSS 文件路径",
             "",
             "管理员指令:",
+            "- /muc_notice summary: 立即生成一次今日 AI 通知速览并推送",
             "- /muc_notice add_push_target: 添加当前会话为推送目标",
             "- /muc_notice remove_push_target: 移除当前会话的推送目标",
             "- /muc_notice list_push_targets: 列出所有推送目标",
@@ -640,7 +776,8 @@ class MucNoticePlugin(Star):
             "配置项:",
             "- rss_title: RSS 标题",
             "- rss_max_items: RSS 最大条目数",
-            "- poll_interval_minutes: 轮询间隔（分钟）",
+            "- poll_interval_minutes: 轮询间隔（分钟，默认 240）",
+            "- daily_summary_enable / daily_summary_hour / daily_summary_minute / daily_summary_lookback_hours: 每日 AI 通知速览",
             "- request_timeout_seconds: 请求超时（秒）",
             "- muc_username / muc_password: 统一身份认证账号",
             "- push_targets: 推送目标会话列表",

@@ -7,7 +7,7 @@
   "rss_max_items": {
     "description": "RSS 保留条数",
     "type": "int",
-    "default": 50
+    "default": 150
   },
   "poll_interval_minutes": {
     "description": "轮询间隔（分钟）",

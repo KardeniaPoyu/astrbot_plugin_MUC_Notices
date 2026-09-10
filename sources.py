@@ -132,7 +132,7 @@ SOURCES: list[SourceConfig] = [
         "category": "portal",
         "base_url": "https://my.muc.edu.cn/",
         "requires_auth": True,
-        "api_params": {"currentPage": 1, "pageSize": 10, "type": 5},
+        "api_params": {"currentPage": 1, "pageSize": 20, "type": 5},
     },
     {
         "key": "my_jxtz",
@@ -143,7 +143,7 @@ SOURCES: list[SourceConfig] = [
         "category": "portal",
         "base_url": "https://my.muc.edu.cn/",
         "requires_auth": True,
-        "api_params": {"currentPage": 1, "pageSize": 10, "type": 6},
+        "api_params": {"currentPage": 1, "pageSize": 20, "type": 6},
     },
     {
         "key": "my_kytz",
@@ -154,7 +154,7 @@ SOURCES: list[SourceConfig] = [
         "category": "portal",
         "base_url": "https://my.muc.edu.cn/",
         "requires_auth": True,
-        "api_params": {"currentPage": 1, "pageSize": 10, "type": 8},
+        "api_params": {"currentPage": 1, "pageSize": 20, "type": 8},
     },
     {
         "key": "my_xgtz",
@@ -165,7 +165,7 @@ SOURCES: list[SourceConfig] = [
         "category": "portal",
         "base_url": "https://my.muc.edu.cn/",
         "requires_auth": True,
-        "api_params": {"currentPage": 1, "pageSize": 10, "type": 32},
+        "api_params": {"currentPage": 1, "pageSize": 20, "type": 32},
     },
 ]
 

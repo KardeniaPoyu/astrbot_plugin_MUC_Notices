@@ -39,7 +39,7 @@ for _module_name in (
 
 from auth_service import MucAuthService
 from command_utils import extract_command_args, format_latest_lines
-from notice_card import render_notices
+from notice_card import render_notices, render_summary_card
 import tempfile
 
 def _render_and_send(event, notices: list, title: str = ""):
@@ -225,19 +225,24 @@ class MucNoticePlugin(Star):
     @muc_notice_group.command("summary")
     @filter.permission_type(PermissionType.ADMIN)
     async def summary_now(self, event: AstrMessageEvent):
-        """立即生成一次今日 AI 通知速览并推送。"""
+        """立即生成一次今日 AI 通知速览（只在当前会话显示，不群发）。"""
         yield event.plain_result("正在生成今日通知速览…")
         try:
-            text = await self._run_daily_summary(force=True)
+            result = await self._run_daily_summary(force=True, push=False)
         except Exception as exc:
             yield event.plain_result(f"生成失败：{exc}")
             return
-        if text:
-            yield event.plain_result(text)
-        else:
+        if not result:
             yield event.plain_result(
                 f"过去 {self._cfg_int('daily_summary_lookback_hours', 24)} 小时没有新通知，或 LLM 不可用。"
             )
+            return
+        digest, count = result
+        img_path = self._render_summary_image(digest, count)
+        if img_path:
+            yield event.chain_result([Image.fromFileSystem(img_path)])
+        else:
+            yield event.plain_result(self._decorate_summary(digest, count))
 
     @muc_notice_group.command("add_push_target")
     @filter.permission_type(PermissionType.ADMIN)
@@ -658,8 +663,13 @@ class MucNoticePlugin(Star):
             except Exception as exc:
                 logger.error(f"[MUC RSS] 每日总结失败：{exc}")
 
-    async def _run_daily_summary(self, force: bool = False) -> Optional[str]:
-        """收集回溯窗口内的通知，交给 LLM 生成速览并推送。返回速览文本 / None。"""
+    async def _run_daily_summary(
+        self, force: bool = False, push: bool = True
+    ) -> Optional[tuple[str, int]]:
+        """收集回溯窗口内的通知，交给 LLM 生成速览。push=True 时群发卡片。
+
+        返回 (速览原文, 参与条数) / None。
+        """
         today = datetime.now(CHINA_TZ).strftime("%Y-%m-%d")
         if not force and await self.get_kv_data("last_summary_date", "") == today:
             return None
@@ -674,7 +684,8 @@ class MucNoticePlugin(Star):
         recent.sort(key=lambda n: n["published_at"], reverse=True)
 
         if not recent:
-            await self.put_kv_data("last_summary_date", today)
+            if push:
+                await self.put_kv_data("last_summary_date", today)
             logger.info(f"[MUC RSS] 每日总结：过去 {lookback}h 无新通知，跳过")
             return None
 
@@ -686,14 +697,73 @@ class MucNoticePlugin(Star):
         except Exception as exc:
             logger.warning(f"[MUC RSS] 补抓正文失败（忽略）：{exc}")
 
-        summary = await self._summarize_notices(recent, lookback)
-        if summary:
-            await self._push_text(summary)
-            logger.info(f"[MUC RSS] 每日总结已推送（{len(recent)} 条通知）")
-        await self.put_kv_data("last_summary_date", today)
-        return summary
+        result = await self._summarize_notices(recent, lookback)
+        if push:
+            if result:
+                digest, count = result
+                await self._push_summary(digest, count)
+                logger.info(f"[MUC RSS] 每日速览已推送（{count} 条通知）")
+            await self.put_kv_data("last_summary_date", today)
+        return result
 
-    async def _summarize_notices(self, notices: list[Notice], lookback: int) -> Optional[str]:
+    def _decorate_summary(self, digest: str, count: int) -> str:
+        header = f"📮 民大今日通知速览 · {datetime.now(CHINA_TZ).strftime('%m月%d日')}\n\n"
+        footer = f"\n\n— AI 依据学校官网自动汇总，共 {count} 条，可能有遗漏，以官方通知原文为准"
+        return header + digest + footer
+
+    def _render_summary_image(self, digest: str, count: int) -> Optional[str]:
+        """渲染速览卡片，返回临时 PNG 路径；失败返回 None。"""
+        try:
+            fd, tmp_path = tempfile.mkstemp(suffix=".png", prefix="muc_summary_")
+            os.close(fd)
+            render_summary_card(
+                digest, count, tmp_path,
+                date_str=datetime.now(CHINA_TZ).strftime("%Y年%m月%d日"),
+            )
+            return tmp_path
+        except Exception as exc:
+            logger.warning(f"[MUC RSS] 速览卡片渲染失败，改用文字：{exc}")
+            return None
+
+    async def _push_summary(self, digest: str, count: int):
+        global_sessions = set(await self._subscription_store.get_global_sessions())
+        push_targets = set(self.config.get("push_targets", []))
+        sessions = global_sessions | push_targets
+        if not sessions:
+            return
+        img_path = self._render_summary_image(digest, count)
+        text = self._decorate_summary(digest, count)
+        for session in sessions:
+            try:
+                if img_path:
+                    await self.context.send_message(
+                        session, MessageChain(chain=[Image.fromFileSystem(img_path)])
+                    )
+                else:
+                    await self.context.send_message(session, MessageChain().plain(text))
+            except Exception as exc:
+                logger.warning(f"[MUC RSS] 速览推送失败 {session}: {exc}，尝试文字兜底")
+                try:
+                    await self.context.send_message(session, MessageChain().plain(text))
+                except Exception:
+                    pass
+        if img_path:
+            asyncio.get_running_loop().call_later(
+                max(0, self._cfg_int("keepFileSec", 60)),
+                lambda: self._safe_unlink(img_path),
+            )
+
+    @staticmethod
+    def _safe_unlink(path: str):
+        try:
+            if path and os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+    async def _summarize_notices(
+        self, notices: list[Notice], lookback: int
+    ) -> Optional[tuple[str, int]]:
         provider = self.context.get_using_provider()
         if provider is None:
             logger.warning("[MUC RSS] 无可用 LLM，跳过每日总结")
@@ -712,16 +782,18 @@ class MucNoticePlugin(Star):
 
         system_prompt = (
             "你是中央民族大学的通知助理。用户给你过去一段时间学校各部门发布的通知，"
-            "每条含标题和正文（部分可能只有标题）。你要**读正文**后汇总成一条"
-            "「今日通知速览」，直接发到学生群里。要求：\n"
-            "1. 开头一句话总括今天主要有哪几类事。\n"
-            "2. 按重要程度分点（最多 8 点），每点一行。要从正文里提炼**真正有用的信息**："
-            "面向谁、要做什么、截止/时间/地点、怎么办理，而不是复述标题。\n"
-            "3. 【严格】只写清单里真实出现的通知，不合并杜撰、不无中生有。\n"
-            "4. 时间地点等只在正文里明确写了才写；「发布日期」不是截止日期，别混。\n"
-            "5. 报名、缴费、补考、四六级、选课、放假、班车调整这类和学生切身相关的排前面。\n"
-            "6. 全文 450 字以内，不要客套话。\n"
-            "7. 正文没读到关键信息、或某条拿不准，就简略带过或不写，别硬编。"
+            "每条含标题和正文（部分可能只有标题）。你要**读正文**后汇总成一份要点清单，"
+            "会被渲染成卡片图发到学生群里。格式要求：\n"
+            "1. 第一行：一句话总括今天主要有哪几类事（不超过 30 字，不要写"
+            "『今日通知速览』这种标题，正文卡片已有标题）。\n"
+            "2. 之后每行一个要点，用『1. 2. 3.』编号，最多 8 条。\n"
+            "3. 每条要点尽量控制在 45 字以内，从正文提炼**真正有用的信息**："
+            "面向谁、要做什么、截止时间 / 地点 / 办理方式，不要复述标题原文。\n"
+            "4. 【严格】只写清单里真实出现的通知，不合并杜撰、不无中生有。\n"
+            "5. 时间地点只在正文里明确写了才写；『发布日期』不是截止日期，别混。\n"
+            "6. 报名、缴费、补考、四六级、选课、放假、班车调整这类和学生切身相关的排前面。\n"
+            "7. 正文没读到关键信息、或某条拿不准，就简略带过或不写，别硬编。\n"
+            "只输出总括句 + 编号要点，不要额外的开场白和结尾。"
         )
         prompt = (
             f"以下是过去 {lookback} 小时中央民族大学发布的通知，共 {len(items)} 条"
@@ -735,18 +807,7 @@ class MucNoticePlugin(Star):
             return None
         if not text:
             return None
-        header = f"📮 民大今日通知速览 · {datetime.now(CHINA_TZ).strftime('%m月%d日')}\n\n"
-        footer = f"\n\n— AI 依据学校官网自动汇总，共 {len(items)} 条，可能有遗漏，以官方通知原文为准"
-        return header + text + footer
-
-    async def _push_text(self, text: str):
-        global_sessions = set(await self._subscription_store.get_global_sessions())
-        push_targets = set(self.config.get("push_targets", []))
-        for session in global_sessions | push_targets:
-            try:
-                await self.context.send_message(session, MessageChain().plain(text))
-            except Exception as exc:
-                logger.warning(f"[MUC RSS] 每日总结推送失败 {session}: {exc}")
+        return text, len(items)
 
     def _help_text(self) -> str:
         auth_count = sum(1 for s in SOURCES if s.get("requires_auth", False))
@@ -774,7 +835,7 @@ class MucNoticePlugin(Star):
             "- /muc_notice rss: 查看 RSS 文件路径",
             "",
             "管理员指令:",
-            "- /muc_notice summary: 立即生成一次今日 AI 通知速览并推送",
+            "- /muc_notice summary: 立即生成一次今日 AI 通知速览卡片（仅当前会话）",
             "- /muc_notice add_push_target: 添加当前会话为推送目标",
             "- /muc_notice remove_push_target: 移除当前会话的推送目标",
             "- /muc_notice list_push_targets: 列出所有推送目标",

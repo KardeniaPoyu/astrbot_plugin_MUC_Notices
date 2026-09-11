@@ -70,6 +70,12 @@ class MucAuthService:
             )
         return self._client
 
+    def invalidate(self) -> None:
+        """标记当前登录态失效。comsys 门户会话会在两次轮询之间过期（不是登录一次
+        管一整天），下次 get_authenticated_client() 会跳过缓存直接重新登录。
+        """
+        self._login_success = False
+
     async def get_authenticated_client(self) -> Optional[httpx.AsyncClient]:
         client = await self.ensure_client()
 

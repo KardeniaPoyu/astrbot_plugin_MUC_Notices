@@ -605,7 +605,7 @@ class MucNoticePlugin(Star):
                     parts.append(f"{item['date']} | \U0001f517 {item['link']}")
                     text = "\n".join(parts)
                     try:
-                        await self.context.send_message(session, MessageChain().plain(text))
+                        await self.context.send_message(session, MessageChain().message(text))
                     except Exception as exc:
                         logger.warning(f"[MUC RSS] 向会话推送文本失败 {session}: {exc}")
 
@@ -740,11 +740,11 @@ class MucNoticePlugin(Star):
                         session, MessageChain(chain=[Image.fromFileSystem(img_path)])
                     )
                 else:
-                    await self.context.send_message(session, MessageChain().plain(text))
+                    await self.context.send_message(session, MessageChain().message(text))
             except Exception as exc:
                 logger.warning(f"[MUC RSS] 速览推送失败 {session}: {exc}，尝试文字兜底")
                 try:
-                    await self.context.send_message(session, MessageChain().plain(text))
+                    await self.context.send_message(session, MessageChain().message(text))
                 except Exception:
                     pass
         if img_path:

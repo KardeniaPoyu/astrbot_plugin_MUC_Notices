@@ -15,6 +15,11 @@ from astrbot.api import logger
 
 from sources import SOURCES, SourceConfig
 
+
+class SessionInvalidError(Exception):
+    """门户 comsys 会话已失效（error_comsys_session_invalid），需要重新登录后重试。"""
+
+
 CHINA_TZ = timezone(timedelta(hours=8))
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -101,22 +106,52 @@ class MucRssService:
                 pub_results = await asyncio.gather(*pub_tasks, return_exceptions=True)
                 
             # 认证来源各自独立client请求
+            async def _fetch_one_auth(client_for_auth, source):
+                async with httpx.AsyncClient(
+                    timeout=timeout_sec,
+                    follow_redirects=True,
+                ) as ac:
+                    # 复制cookies到新client
+                    if hasattr(client_for_auth, "cookies"):
+                        ac.cookies = client_for_auth.cookies
+                    return await self._fetch_source_notices(ac, source)
+
             auth_results = []
+            invalid_idx: list[int] = []
             if auth_client and auth_sources:
-                for source in auth_sources:
+                for idx, source in enumerate(auth_sources):
                     try:
-                        async with httpx.AsyncClient(
-                            timeout=timeout_sec,
-                            follow_redirects=True,
-                        ) as ac:
-                            # 复制cookies到新client
-                            if hasattr(auth_client, 'cookies'):
-                                ac.cookies = auth_client.cookies
-                            result = await self._fetch_source_notices(ac, source)
-                            auth_results.append(result)
+                        auth_results.append(await _fetch_one_auth(auth_client, source))
+                    except SessionInvalidError:
+                        auth_results.append([])
+                        invalid_idx.append(idx)
                     except Exception as e:
                         auth_results.append(e)
-            
+
+                # comsys 会话会在两次轮询之间过期（不像 CAS 票据那样一次登录管一天）；
+                # 一旦探测到 error_comsys_session_invalid，强制重新登录一次并原地重试，
+                # 而不是干等下一轮轮询——那样这一轮的门户通知就彻底丢了。
+                if invalid_idx and self._auth_service:
+                    logger.info(
+                        f"[MUC RSS] {len(invalid_idx)} 个门户来源会话失效，重新登录后重试"
+                    )
+                    self._auth_service.invalidate()
+                    fresh_client = await self._auth_service.get_authenticated_client()
+                    if fresh_client:
+                        for idx in invalid_idx:
+                            try:
+                                auth_results[idx] = await _fetch_one_auth(
+                                    fresh_client, auth_sources[idx]
+                                )
+                            except Exception as e:
+                                logger.info(
+                                    f"[MUC RSS] API 来源 {auth_sources[idx]['key']} "
+                                    f"重试后仍失败: {e}"
+                                )
+                                auth_results[idx] = e
+                    else:
+                        logger.warning("[MUC RSS] 重新登录失败，门户来源本轮跳过")
+
             return pub_results + auth_results
 
         results = await _fetch_all()
@@ -264,6 +299,9 @@ class MucRssService:
         try:
             response = await client.post(source["url"], data=api_params, headers=ajax_headers)
             response.raise_for_status()
+            body_head = response.text[:80]
+            if "error_comsys_session_invalid" in body_head:
+                raise SessionInvalidError(source["key"])
             data = response.json()
             tables = data.get("datas", {}).get("tables", [])
             if not tables:
@@ -329,6 +367,8 @@ class MucRssService:
                     "content": content_text,
                 })
             return notices
+        except SessionInvalidError:
+            raise
         except Exception as exc:
             logger.info(f"[MUC RSS] API 来源 {source['key']} 失败: {exc}")
             return []

@@ -154,6 +154,181 @@ def _wrap(text: str, width: int, max_lines: int | None = None) -> str:
     return "\n".join(lines)
 
 
+_NO_LINE_START = "。，、；：？！）】》」』””’.,;:?!)>%…"
+_NO_LINE_END = "（【《「『(<“‘"
+
+
+def _cjk_wrap(text: str, width: int) -> list[str]:
+    """按显示宽度折行（CJK 计 1，其它计 0.55），避免行首出现收尾标点。"""
+    text = str(text).strip()
+    if not text:
+        return []
+    _NUMISH = set("0123456789:：.-—~")
+    lines: list[str] = []
+    cur = ""
+    w = 0.0
+    for ch in text:
+        cw = 1.0 if ord(ch) > 0x2E7F else 0.55
+        if w + cw > width and cur:
+            # 不在数字/时间串中间断行（如 "21-22日" "6000元"），最多多撑 4 个宽度
+            if not (cur[-1] in _NUMISH and ch in _NUMISH and w + cw <= width + 4):
+                lines.append(cur)
+                cur, w = "", 0.0
+        cur += ch
+        w += cw
+    if cur:
+        lines.append(cur)
+
+    fixed: list[str] = []
+    for ln in lines:
+        if fixed and ln and ln[0] in _NO_LINE_START:
+            i = 0
+            while i < len(ln) and ln[i] in _NO_LINE_START:
+                i += 1
+            fixed[-1] += ln[:i]
+            ln = ln[i:]
+        if ln:
+            fixed.append(ln)
+    return fixed or [text]
+
+
+def _wrap_lines(text: str, width: int) -> list[str]:
+    out: list[str] = []
+    for para in str(text).split("\n"):
+        if para.strip():
+            out.extend(_cjk_wrap(para, width))
+    return out
+
+
+def render_summary_card(summary_text: str, count: int, save_path: str, date_str: str = ""):
+    """把 AI 生成的「今日通知速览」渲染成一张卡片图。
+
+    summary_text: LLM 原始输出（开头一段总括 + 若干「1. / 2.」编号要点）。
+    count: 参与汇总的通知条数，用于页脚。
+    """
+    import re as _re
+    import datetime as _dt
+
+    if not date_str:
+        date_str = _dt.datetime.now().strftime("%Y年%m月%d日")
+
+    raw_lines = [l.strip() for l in str(summary_text).strip().split("\n") if l.strip()]
+    # 拆成 (是否编号点, 文本)
+    entries: list[tuple[bool, str]] = []
+    for line in raw_lines:
+        m = _re.match(r"^\s*(?:\d+[\.、\)]|[-*・•])\s*(.+)$", line)
+        if m:
+            entries.append((True, m.group(1).strip()))
+        else:
+            entries.append((False, line))
+
+    card_width = 7.9
+    left = 0.35
+    right = left + card_width
+    text_x = left + 0.42
+    body_w = card_width - 0.9
+
+    WRAP_INTRO = 40
+    WRAP_POINT = 37
+    LINE_H = 0.30
+    INTRO_GAP = 0.18
+    POINT_GAP = 0.22
+
+    # 预排版，算总高
+    laid: list[dict] = []
+    for is_point, txt in entries:
+        w = WRAP_POINT if is_point else WRAP_INTRO
+        wrapped = _wrap_lines(txt, w)
+        laid.append({"point": is_point, "lines": wrapped})
+
+    header_h = 0.72
+    footer_h = 0.5
+    top_margin = 0.3
+    card_top_pad = 0.32
+    card_bottom_pad = 0.34
+
+    content_h = 0.0
+    for i, item in enumerate(laid):
+        content_h += len(item["lines"]) * LINE_H
+        content_h += POINT_GAP if item["point"] else INTRO_GAP
+    card_h = card_top_pad + content_h + card_bottom_pad
+    fig_height = max(3.0, top_margin + header_h + 0.25 + card_h + footer_h)
+
+    fig, ax = plt.subplots(figsize=(8.6, fig_height))
+    ax.set_xlim(0, 8.6)
+    ax.set_ylim(0, fig_height)
+    ax.axis("off")
+    fig.patch.set_facecolor(MUC_BG)
+    ax.set_facecolor(MUC_BG)
+
+    y = fig_height - top_margin
+
+    # 顶部标题栏
+    header = FancyBboxPatch((left, y - header_h), card_width, header_h,
+                            boxstyle="round,pad=0,rounding_size=0.12",
+                            facecolor=MUC_RED, edgecolor="none")
+    ax.add_patch(header)
+    badge_cx, badge_cy = left + 0.36, y - header_h / 2
+    badge_img = _load_badge()
+    title_x = left + 0.66
+    if badge_img is not None:
+        bb = OffsetImage(badge_img, zoom=0.14, alpha=0.55)
+        bb.image.axes = ax
+        ax.add_artist(AnnotationBbox(bb, (badge_cx, badge_cy), frameon=False, pad=0, zorder=3))
+    else:
+        ax.add_patch(Circle((badge_cx, badge_cy), 0.045, facecolor=WHITE, edgecolor="none", alpha=0.85))
+        title_x = left + 0.55
+    ax.text(title_x, y - header_h / 2 + 0.08, "民大今日通知速览",
+            fontsize=14, fontweight="bold", ha="left", va="center", color=WHITE)
+    ax.text(title_x, y - header_h / 2 - 0.16, date_str,
+            fontsize=8, ha="left", va="center", color="#f0d9de")
+    ax.text(right - 0.3, y - header_h / 2, f"汇总 {count} 条",
+            fontsize=8, ha="right", va="center", color="#f0d9de")
+    y -= header_h + 0.25
+
+    # 正文卡片
+    card_y = y - card_h
+    shadow = FancyBboxPatch((left + 0.045, card_y - 0.035), card_width, card_h,
+                            boxstyle="round,pad=0,rounding_size=0.10",
+                            facecolor=CARD_SHADOW, edgecolor="none", alpha=0.55)
+    ax.add_patch(shadow)
+    card = FancyBboxPatch((left, card_y), card_width, card_h,
+                          boxstyle="round,pad=0,rounding_size=0.10",
+                          facecolor=CARD_BG, edgecolor=CARD_BORDER, linewidth=0.8)
+    ax.add_patch(card)
+
+    cursor = card_y + card_h - card_top_pad
+    point_no = 0
+    for item in laid:
+        if item["point"]:
+            point_no += 1
+            # 红色序号圆点
+            ax.add_patch(Circle((text_x - 0.02, cursor - 0.02), 0.11,
+                                facecolor=MUC_ACCENT, edgecolor="none"))
+            ax.text(text_x - 0.02, cursor - 0.02, str(point_no),
+                    fontsize=7.5, fontweight="bold", color=WHITE, ha="center", va="center")
+            tx = text_x + 0.26
+            ax.text(tx, cursor + 0.11, "\n".join(item["lines"]),
+                    fontsize=9.5, color=TEXT_DARK, va="top", linespacing=1.55)
+            cursor -= len(item["lines"]) * LINE_H + POINT_GAP
+        else:
+            ax.text(text_x, cursor + 0.11, "\n".join(item["lines"]),
+                    fontsize=10, color=MUC_RED, fontweight="bold",
+                    va="top", linespacing=1.5)
+            cursor -= len(item["lines"]) * LINE_H + INTRO_GAP
+
+    # 页脚
+    footer_y = footer_h * 0.55
+    ax.plot([left + 0.2, right - 0.2], [footer_y + 0.22, footer_y + 0.22],
+            color=CARD_BORDER, linewidth=1)
+    ax.text((left + right) / 2, footer_y, "AI 依据学校官网自动汇总 · 可能有遗漏 · 以官方通知原文为准",
+            fontsize=7, color=MUC_GRAY, ha="center", va="center")
+
+    fig.savefig(save_path, dpi=150, bbox_inches="tight", facecolor=MUC_BG, pad_inches=0.25)
+    plt.close(fig)
+    return save_path
+
+
 def render_notices(notices: list[dict], save_path: str):
     """将通知列表渲染为卡片图片"""
     n = len(notices)

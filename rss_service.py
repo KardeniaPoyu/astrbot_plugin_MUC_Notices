@@ -15,6 +15,11 @@ from astrbot.api import logger
 
 from sources import SOURCES, SourceConfig
 
+
+class SessionInvalidError(Exception):
+    """门户 comsys 会话已失效（error_comsys_session_invalid），需要重新登录后重试。"""
+
+
 CHINA_TZ = timezone(timedelta(hours=8))
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -42,7 +47,8 @@ class Notice(TypedDict):
     date: str
     pub_date: str
     published_at: datetime
-    summary: str  # 内容摘要/预览
+    summary: str  # 内容摘要/预览（卡片用，短）
+    content: str  # 正文纯文本（AI 速览用，可能较长；web 来源默认空，需 enrich_contents 补）
 
 
 class MucRssService:
@@ -100,22 +106,52 @@ class MucRssService:
                 pub_results = await asyncio.gather(*pub_tasks, return_exceptions=True)
                 
             # 认证来源各自独立client请求
+            async def _fetch_one_auth(client_for_auth, source):
+                async with httpx.AsyncClient(
+                    timeout=timeout_sec,
+                    follow_redirects=True,
+                ) as ac:
+                    # 复制cookies到新client
+                    if hasattr(client_for_auth, "cookies"):
+                        ac.cookies = client_for_auth.cookies
+                    return await self._fetch_source_notices(ac, source)
+
             auth_results = []
+            invalid_idx: list[int] = []
             if auth_client and auth_sources:
-                for source in auth_sources:
+                for idx, source in enumerate(auth_sources):
                     try:
-                        async with httpx.AsyncClient(
-                            timeout=timeout_sec,
-                            follow_redirects=True,
-                        ) as ac:
-                            # 复制cookies到新client
-                            if hasattr(auth_client, 'cookies'):
-                                ac.cookies = auth_client.cookies
-                            result = await self._fetch_source_notices(ac, source)
-                            auth_results.append(result)
+                        auth_results.append(await _fetch_one_auth(auth_client, source))
+                    except SessionInvalidError:
+                        auth_results.append([])
+                        invalid_idx.append(idx)
                     except Exception as e:
                         auth_results.append(e)
-            
+
+                # comsys 会话会在两次轮询之间过期（不像 CAS 票据那样一次登录管一天）；
+                # 一旦探测到 error_comsys_session_invalid，强制重新登录一次并原地重试，
+                # 而不是干等下一轮轮询——那样这一轮的门户通知就彻底丢了。
+                if invalid_idx and self._auth_service:
+                    logger.info(
+                        f"[MUC RSS] {len(invalid_idx)} 个门户来源会话失效，重新登录后重试"
+                    )
+                    self._auth_service.invalidate()
+                    fresh_client = await self._auth_service.get_authenticated_client()
+                    if fresh_client:
+                        for idx in invalid_idx:
+                            try:
+                                auth_results[idx] = await _fetch_one_auth(
+                                    fresh_client, auth_sources[idx]
+                                )
+                            except Exception as e:
+                                logger.info(
+                                    f"[MUC RSS] API 来源 {auth_sources[idx]['key']} "
+                                    f"重试后仍失败: {e}"
+                                )
+                                auth_results[idx] = e
+                    else:
+                        logger.warning("[MUC RSS] 重新登录失败，门户来源本轮跳过")
+
             return pub_results + auth_results
 
         results = await _fetch_all()
@@ -233,6 +269,7 @@ class MucRssService:
                         "pub_date": published_at.strftime("%a, %d %b %Y %H:%M:%S +0800"),
                         "published_at": published_at,
                         "summary": "",
+                        "content": "",
                     }
                 )
                 seen_links.add(full_url)
@@ -262,6 +299,9 @@ class MucRssService:
         try:
             response = await client.post(source["url"], data=api_params, headers=ajax_headers)
             response.raise_for_status()
+            body_head = response.text[:80]
+            if "error_comsys_session_invalid" in body_head:
+                raise SessionInvalidError(source["key"])
             data = response.json()
             tables = data.get("datas", {}).get("tables", [])
             if not tables:
@@ -298,16 +338,18 @@ class MucRssService:
                                     published_at = parsed
                     except Exception:
                         pass
-                # 提取纯文本摘要（去掉HTML标签）
+                # 提取纯文本：summary 是短预览（卡片），content 是较完整正文（AI 速览）
                 raw_content = item.get("notice_content", "")
                 summary_text = ""
+                content_text = ""
                 if raw_content:
                     try:
                         from bs4 import BeautifulSoup
                         soup = BeautifulSoup(raw_content, "html.parser")
                         plain = soup.get_text(separator=" ", strip=True)
-                        # 取前 500 个字符作为摘要预览
+                        plain = re.sub(r"\s+", " ", plain).strip()
                         summary_text = plain[:80] + ("..." if len(plain) > 80 else "")
+                        content_text = plain[:2000]
                     except Exception:
                         pass
 
@@ -322,8 +364,11 @@ class MucRssService:
                     "pub_date": published_at.strftime("%a, %d %b %Y %H:%M:%S +0800"),
                     "published_at": published_at,
                     "summary": summary_text,
+                    "content": content_text,
                 })
             return notices
+        except SessionInvalidError:
+            raise
         except Exception as exc:
             logger.info(f"[MUC RSS] API 来源 {source['key']} 失败: {exc}")
             return []
@@ -412,6 +457,50 @@ class MucRssService:
         headers = dict(DEFAULT_HEADERS)
         headers["Referer"] = source.get("base_url") or request_url or source["url"]
         return headers
+
+    # 文章正文里常见的容器（民大各站基本是织梦/CMS 那套）
+    _ARTICLE_SELECTORS = (
+        ".v_news_content", ".content", ".article-content", ".TRS_Editor",
+        "#vsb_content", ".wp_articlecontent", "#zoom", ".news_content", "article",
+    )
+
+    async def enrich_contents(self, notices: list["Notice"], limit: int = 15) -> None:
+        """为 content 为空的通知（一般是 web 抓取来源）逐条抓取原文正文，原地写回 content。
+
+        只处理前 limit 条，短超时 + 并发受 self._semaphore 限制，任何失败静默跳过。
+        """
+        targets = [
+            n for n in notices
+            if not (n.get("content") or "").strip() and (n.get("link") or "").startswith("http")
+        ][:limit]
+        if not targets:
+            return
+
+        timeout = min(self._cfg_int("request_timeout_seconds", 20), 15)
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=timeout, headers=DEFAULT_HEADERS
+        ) as client:
+            async def _one(n: "Notice") -> None:
+                async with self._semaphore:
+                    try:
+                        r = await client.get(n["link"])
+                        r.raise_for_status()
+                        soup = BeautifulSoup(r.text, "html.parser")
+                        node = None
+                        for sel in self._ARTICLE_SELECTORS:
+                            node = soup.select_one(sel)
+                            if node:
+                                break
+                        node = node or soup.body or soup
+                        for bad in node.select("script, style, nav, header, footer"):
+                            bad.decompose()
+                        text = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+                        if len(text) >= 20:
+                            n["content"] = text[:2000]
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug(f"[MUC RSS] 抓正文失败 {n.get('link')}: {exc}")
+
+            await asyncio.gather(*(_one(n) for n in targets))
 
     def _cfg_int(self, key: str, default: int) -> int:
         try:

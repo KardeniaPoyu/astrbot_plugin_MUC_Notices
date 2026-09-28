@@ -682,6 +682,12 @@ class MucNoticePlugin(Star):
             if n["published_at"].year > 2000 and n["published_at"] >= cutoff
         ]
         recent.sort(key=lambda n: n["published_at"], reverse=True)
+        # 同一篇新闻常被新闻网和专题站各发一份，按标题去重，免得速览里重复
+        seen_titles: set[str] = set()
+        recent = [
+            n for n in recent
+            if not (n["title"].strip() in seen_titles or seen_titles.add(n["title"].strip()))
+        ]
 
         if not recent:
             if push:

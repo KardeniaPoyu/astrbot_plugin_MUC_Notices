@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from hashlib import sha1
 from pathlib import Path
 from typing import Any, TypedDict, Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup, Tag
@@ -55,6 +55,7 @@ class MucRssService:
     def __init__(self, config: Optional[dict[str, Any]] = None, auth_service=None):
         self.config = config or {}
         self._auth_service = auth_service  # MucAuthService 实例
+        self._article_date_cache: dict[str, Optional[datetime]] = {}
         # 并发控制: 限制同时请求数，避免对目标站点造成压力（可配置）
         max_concurrent = self._cfg_int("max_concurrent_requests", 5)
         self._semaphore = asyncio.Semaphore(max_concurrent)
@@ -276,6 +277,8 @@ class MucRssService:
 
         if not notices:
             logger.info(f"[MUC RSS] 来源无有效条目 {source['key']} urls={page_urls}")
+        else:
+            await self._resolve_dates_from_articles(client, source, notices)
         return notices
 
     async def _fetch_api_source_notices(
@@ -381,14 +384,68 @@ class MucRssService:
             self._collect_sibling_text(tag),
         ]
 
+        # 发布日期不可能在未来。有的列表页（如学校首页"通知公告"）根本不显示日期，
+        # 只有一段正文摘要，里面的"项目实施周期：2026年10月8日"会被误当成发布日期，
+        # 导致同一条通知在每日速览里连着出现到那一天为止。
+        latest_ok = datetime.now(CHINA_TZ) + timedelta(days=1)
         for text in candidates:
             if not text:
                 continue
-            extracted = self._parse_date(str(text))
-            if extracted is not None:
-                return extracted
+            for extracted in self._iter_dates(str(text)):
+                if extracted <= latest_ok:
+                    return extracted
 
         return datetime(2000, 1, 1, tzinfo=CHINA_TZ)
+
+    def _iter_dates(self, text: str) -> Iterable[datetime]:
+        """按出现顺序给出文本里所有完整日期，最后才退回到 _parse_date 的短日期解析。"""
+        for match in DATE_PATTERN_FULL.finditer(text):
+            try:
+                yield datetime(
+                    int(match.group("year")), int(match.group("month")), int(match.group("day")),
+                    tzinfo=CHINA_TZ,
+                )
+            except ValueError:
+                continue
+        if not DATE_PATTERN_FULL.search(text):
+            parsed = self._parse_date(text)
+            if parsed is not None:
+                yield parsed
+
+    async def _resolve_dates_from_articles(
+        self, client: httpx.AsyncClient, source: SourceConfig, notices: list["Notice"]
+    ) -> None:
+        """列表页取不到日期的条目，去文章页取发布时间（文章页头部会写 2026-09-24 这样的日期）。
+
+        按链接缓存，同一篇文章只抓一次。取不到就保持"日期未知"，每日速览不会把它算作新通知。
+        """
+        latest_ok = datetime.now(CHINA_TZ) + timedelta(days=1)
+        for notice in notices:
+            if notice["published_at"].year > 2000:
+                continue
+            link = notice["link"]
+            # 站点首页/目录页（如专题网站入口）不是文章：页面上的第一个日期是它最新一条新闻的，
+            # 取了会让这个入口随对方网站更新反复变成"新通知"
+            if urlparse(link).path.rstrip("/") == "" or urlparse(link).path.endswith("/"):
+                continue
+            found = self._article_date_cache.get(link)
+            if found is None and link not in self._article_date_cache:
+                try:
+                    # 调用方 fetch_notices 已经持有 self._semaphore，这里再申请会在并发打满时死锁；
+                    # 同一来源内本来就是逐篇顺序抓取
+                    resp = await client.get(link, headers=self._request_headers(source, link))
+                    resp.raise_for_status()
+                    found = next(
+                        (d for d in self._iter_dates(resp.text) if d <= latest_ok), None
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(f"[MUC RSS] 文章页取日期失败 {link}: {exc}")
+                    found = None
+                self._article_date_cache[link] = found
+            if found is not None:
+                notice["published_at"] = found
+                notice["date"] = found.strftime("%Y-%m-%d %H:%M")
+                notice["pub_date"] = found.strftime("%a, %d %b %Y %H:%M:%S +0800")
 
     def _iter_ancestor_texts(self, tag: Tag, depth: int) -> Iterable[str]:
         current = tag.parent
